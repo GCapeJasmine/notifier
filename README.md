@@ -1,64 +1,13 @@
-# Subscribers
+# Notifier
 
 A Go service that consumes subscriber lifecycle events from Kafka and notifies external partner services via HTTP webhook. Built with a composable processor pipeline, exponential-backoff retries, and a PostgreSQL dead-letter queue with replay capability.
 
----
+## Documentation
 
-## Architecture
+Architecture decisions, full flow diagrams, and design trade-offs live in [`docs/adr/`](docs/adr/):
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  Flow A: Event Streaming (main service)                         │
-│                                                                 │
-│  Kafka topic                                                    │
-│  subscribers.events.*                                           │
-│       │                                                         │
-│       ▼                                                         │
-│  [SegmentIOSource]  ──── fetch batch ──────────────────────┐   │
-│       │                                                     │   │
-│       ▼                                                     │   │
-│  [DeadLetterProcessor]  ◄── wraps entire chain             │   │
-│       │   on error → save to PostgreSQL dead_letters        │   │
-│       ▼                                                     │   │
-│  [Retry]  exponential backoff (configurable)                │   │
-│       │                                                     │   │
-│       ▼                                                     │   │
-│  [MaxWait]  per-message timeout (default 30s)               │   │
-│       │                                                     │   │
-│       ▼                                                     │   │
-│  [NotifyEventParser]  unmarshal JSON, filter non-CRUD       │   │
-│       │                                                     │   │
-│       ▼                                                     │   │
-│  [Notifier]  POST to partner service (op: c/u/d/a)          │   │
-│       │                                                     │   │
-│       └─────────────────────────────────────────────────────┘   │
-│                            commit Kafka offset                  │
-└─────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────┐
-│  Flow B: Dead-Letter Replay (job)                               │
-│                                                                 │
-│  PostgreSQL dead_letters                                        │
-│       │  (filter: ids / id range / tenant_id / workflow)        │
-│       ▼                                                         │
-│  [DeadLetterSource]  paginate records                           │
-│       │                                                         │
-│       ▼                                                         │
-│  [DeadLetterDispatcher]                                         │
-│       │  re-enter original workflow at step [Retry]             │
-│       ├── success → DELETE dead_letters row                     │
-│       └── failure → UPDATE retry_count + error                  │
-└─────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────┐
-│  Flow C: Publish Event (test utility)                           │
-│                                                                 │
-│  Config (tenants, subscribers, interval)                        │
-│       │                                                         │
-│       ▼                                                         │
-│  [Publisher]  generate synthetic CRUD events → Kafka topic      │
-└─────────────────────────────────────────────────────────────────┘
-```
+- [ADR-0001 — Notifier Architecture](docs/adr/0001-notifier-architecture.md) — Kafka consumer, workflow engine, dead-letter queue, retry strategy, observability, fairness
+- [ADR-0002 — Upstream API & Outbox](docs/adr/0002-upstream-api-and-outbox.md) — API authentication, API key design, transactional outbox pattern
 
 ---
 
@@ -95,79 +44,45 @@ subscribers/
 
 ---
 
-## Full Flows
+## Architecture
 
-### Flow A — Event Streaming
+The service is structured around **Hexagonal Architecture** (Ports and Adapters). Dependency arrows point inward only — infrastructure knows about the domain; the domain knows nothing about infrastructure.
 
-**Entry point:** `cmd/event-streaming/main.go`
-
-The service runs a single continuous loop: fetch → process → commit.
-
-| Step | Component | What it does |
-|------|-----------|--------------|
-| 1 | `SegmentIOSource` | Reads a batch of messages from the Kafka topic |
-| 2 | `DeadLetterProcessor` | Wraps the remaining chain; on any error saves the raw message to `dead_letters` in PostgreSQL |
-| 3 | `Retry` | Retries the downstream chain with exponential backoff before giving up and letting the dead-letter handler fire |
-| 4 | `MaxWait` | Cancels context if a single message takes longer than `notifier_max_duration` |
-| 5 | `NotifyEventParser` | Unmarshals Kafka key (`tenant_id`, `subscriber_id`) and value (event payload); drops messages with empty values |
-| 6 | `Notifier` | Routes by `op` field and POSTs to the partner service via HTTP |
-| 7 | (source) | Kafka offset committed only after all steps succeed |
-
-**Operation codes** in the event payload:
-
-| `op` | Meaning |
-|------|---------|
-| `c` | Create subscriber |
-| `u` | Update subscriber |
-| `d` | Delete subscriber |
-| `a` | Add subscriber to segment |
-
-**Kafka message shape:**
-
-```json
-// Key
-{ "tenant_id": "t1", "subscriber_id": "s1" }
-
-// Value
-{
-  "payload": {
-    "event_id": "uuid",
-    "op": "c",
-    "tenant_id": "t1",
-    "subscriber": { "subscriber_id": "s1" },
-    "occurred_at": "2024-01-01T00:00:00Z"
-  }
-}
+```
+  ┌───────────────────────────────────────────────────────────────────┐
+  │  External Systems                                                 │
+  │  Kafka · PostgreSQL · HTTP Partner                                │
+  │                                                                   │
+  │  ┌─────────────────────────────────────────────────────────────┐  │
+  │  │  Adapters  (internal/adapter/ · pkg/ · common/)             │  │
+  │  │  Kafka reader/writer, GORM dead-letter repo, partner client │  │
+  │  │                                                             │  │
+  │  │  ┌───────────────────────────────────────────────────────┐  │  │
+  │  │  │  Application  (internal/application/ · pkg/workflow/) │  │  │
+  │  │  │  event-streaming workflow · dead-letter-replay job    │  │  │
+  │  │  │                                                       │  │  │
+  │  │  │  ┌─────────────────────────────────────────────────┐  │  │  │
+  │  │  │  │  Ports  (internal/port/)                        │  │  │  │
+  │  │  │  │  DeadLetterRepository  (interface)              │  │  │  │
+  │  │  │  │                                                 │  │  │  │
+  │  │  │  │  ┌───────────────────────────────────────────┐  │  │  │  │
+  │  │  │  │  │  Domain  (internal/domain/)               │  │  │  │  │
+  │  │  │  │  │  DeadLetter entity                        │  │  │  │  │
+  │  │  │  │  └───────────────────────────────────────────┘  │  │  │  │
+  │  │  │  └─────────────────────────────────────────────────┘  │  │  │
+  │  │  └───────────────────────────────────────────────────────┘  │  │
+  │  └─────────────────────────────────────────────────────────────┘  │
+  └───────────────────────────────────────────────────────────────────┘
 ```
 
----
-
-### Flow B — Dead-Letter Replay
-
-**Entry point:** `cmd/job/trivial/dead-letter-replay/main.go`
-
-Reads previously failed messages from PostgreSQL and re-runs them through the notify workflow (starting after `SegmentIOSource`, at the `Retry` step).
-
-**Filter options** (set in `replay:` config section):
-
-| Field | Description |
-|-------|-------------|
-| `ids` | Replay specific dead-letter IDs |
-| `from_id` / `to_id` | Replay an ID range |
-| `tenant_id` | Replay all failures for a tenant |
-| *(none)* | Defaults to workflow-based pagination |
-
-**Outcome per letter:**
-- Success → row deleted from `dead_letters`
-- Failure → `retry_count` incremented, `error` updated
-
----
-
-### Flow C — Publish Event (Test Utility)
-
-**Entry point:** `cmd/job/trivial/publish-event/main.go`
-
-Generates and publishes synthetic subscriber events to Kafka on a configurable interval. Used to seed local development or load-test the pipeline.
+| Layer | Directory | Depends on |
+|-------|-----------|------------|
+| Domain | `internal/domain/` | nothing |
+| Port | `internal/port/persistent/` | domain only |
+| Application | `internal/application/` | domain + ports |
+| Adapter | `internal/adapter/` | ports (implements them) |
+| Infrastructure | `pkg/`, `common/` | nothing internal |
+| Entry points | `cmd/` | application layer |
 
 ---
 
@@ -276,28 +191,6 @@ Sample configs for all variants (small / whale) are in the `config/` directory.
 
 ---
 
-## Partner Webhook API
-
-The service calls the partner endpoint for every event it processes:
-
-```
-POST {partner.base_url}
-x-api-key: {partner.key}
-Content-Type: application/json
-
-{
-  "event_id": "uuid",
-  "op": "c",
-  "tenant_id": "t1",
-  "subscriber": { ... },
-  "occurred_at": "2024-01-01T00:00:00Z"
-}
-```
-
-Non-2xx responses are treated as errors and trigger the retry/dead-letter path.
-
----
-
 ## Local Development
 
 **Prerequisites:** Docker, Go 1.25+
@@ -351,22 +244,6 @@ replay:
 replay:
   tenant_id: "tenant-001"
 ```
-
----
-
-## Observability
-
-**Prometheus metrics** — scraped at `http://localhost:6067/metrics`
-
-| Metric | Description |
-|--------|-------------|
-| `fetch_message_latency` | Kafka fetch duration |
-| `fetch_message_lag` | Age of message at fetch time |
-| `commit_message_latency` | Kafka commit duration |
-| `commit_message_lag` | End-to-end processing lag |
-| `write_message_latency` | Kafka write duration (publisher) |
-
-**Structured logging** via `go.uber.org/zap`. All log lines include workflow name, tenant ID, and offset where applicable.
 
 ---
 
