@@ -1,0 +1,38 @@
+# Binaries
+/dead-letter-replay
+/mock-partner
+/publish-event
+/webhook-notifier
+*.exe
+
+# Build output
+/dist/
+/bin/
+
+# Go toolchain
+vendor/
+
+# Test artifacts
+*.test
+*.out
+coverage.html
+coverage.txt
+
+# Environment / secrets
+.env
+.env.*
+*.pem
+*.key
+
+# macOS
+.DS_Store
+
+# JetBrains IDEs
+.idea/
+!.idea/.gitignore
+
+# VS Code
+.vscode/
+
+# Wire generated files (optional — remove if you commit them)
+# wire_gen.go

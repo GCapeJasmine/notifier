@@ -1,0 +1,38 @@
+workflow_name: "notify-workflow"
+
+kafka_reader:
+  auth:
+    url: "localhost:9092"
+  group_id: "webhook-notifier"
+  topic: "subscribers.events.small"
+  start_offset: -2
+
+kafka_writer:
+  auth:
+    url: "localhost:9092"
+  topic: "subscribers.events.deadletter.small"
+
+metric:
+  enable: true
+  port: 6067
+
+notifier_max_duration: "30s"
+
+retry_option:
+  enabled: true
+  enabled_log: true
+  initial_interval: "1s"
+  randomization_factor: 0.5
+  multiplier: 2.0
+  max_interval: "30s"
+  max_elapsed_time: "5m"
+  max_retries: 5
+
+partner:
+  base_url: "http://localhost:8080"
+  key: "local-api-key"
+  client_config:
+    retry_max_wait: "30s"
+    retry_interval: "500ms"
+    retry_count: 3
+    enable_logger: true

@@ -1,0 +1,45 @@
+replay:
+  tenant_id: "tenant-002"
+
+event_streaming:
+  workflow_name: "notify-workflow"
+
+  kafka_reader:
+    auth:
+      url: "localhost:9092"
+    group_id: "webhook-notifier"
+    topic: "subscribers.events"
+    start_offset: -1
+
+  postgres:
+    host: "localhost"
+    port: 5432
+    username: "postgres"
+    password: "postgres"
+    database: "subscribers"
+    ssl_mode: "disable"
+
+  metric:
+    enable: false
+    port: 6067
+
+  notifier_max_duration: "30s"
+
+  retry_option:
+    enabled: true
+    enabled_log: true
+    initial_interval: "200ms"
+    randomization_factor: 0.5
+    multiplier: 2.0
+    max_interval: "2s"
+    max_elapsed_time: "10s"
+    max_retries: 3
+
+  partner:
+    base_url: "http://localhost:8080"
+    key: "local-api-key"
+    client_config:
+      retry_max_wait: "30s"
+      retry_interval: "500ms"
+      retry_count: 3
+      enable_logger: true

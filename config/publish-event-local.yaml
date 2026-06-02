@@ -1,0 +1,34 @@
+kafka_writer:
+  auth:
+    url: "localhost:9092"
+  topic: "subscribers.events"
+
+event:
+  interval: "2s"
+
+  tenant_ids:
+    - "tenant-001"
+    - "tenant-002"
+    - "tenant-003"
+
+  subscribers:
+    - subscriber_id: "sub-001"
+      data: '{"subscriber_id":"sub-001"}'
+    - subscriber_id: "sub-002"
+      data: '{"subscriber_id":"sub-002"}'
+    - subscriber_id: "sub-003"
+      data: '{"subscriber_id":"sub-003"}'
+    - subscriber_id: "sub-004"
+      data: '{"subscriber_id":"sub-004"}'
+    - subscriber_id: "sub-005"
+      data: '{"subscriber_id":"sub-005"}'
+    - subscriber_id: "sub-006"
+      data: '{"subscriber_id":"sub-006"}'
+    - subscriber_id: "sub-007"
+      data: '{"subscriber_id":"sub-007"}'
+    - subscriber_id: "sub-008"
+      data: '{"subscriber_id":"sub-008"}'
+    - subscriber_id: "sub-009"
+      data: '{"subscriber_id":"sub-009"}'
+    - subscriber_id: "sub-010"
+      data: '{"subscriber_id":"sub-010"}'
