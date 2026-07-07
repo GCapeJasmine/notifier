@@ -32,29 +32,29 @@ Năm thách thức cốt lõi chi phối mọi quyết định kiến trúc và 
         │
         ▼
   ┌─────────────────────────────────────────────────────────────┐
-  │  services  (mutable — có thể sửa)                          │
-  │  • tên, mô tả, hình ảnh, điều kiện: chỉnh sửa tự do       │
-  │  • KHÔNG được tham chiếu trực tiếp bởi package hay voucher │
+  │  services  (mutable — có thể sửa)                           │
+  │  • tên, mô tả, hình ảnh, điều kiện: chỉnh sửa tự do         │
+  │  • KHÔNG được tham chiếu trực tiếp bởi package hay voucher  │
   └────────────────────────────┬────────────────────────────────┘
                                │  ACE phê duyệt → publish
                                ▼
   ┌─────────────────────────────────────────────────────────────┐
-  │  service_snapshots  (immutable — bất biến, append-only)    │
-  │  • bản sao đầy đủ đóng băng lúc publish (snapshot_data)   │
-  │  • snapshot_id = UUID cố định; version v+1 mỗi lần publish │
-  │  • snapshot cũ không bao giờ bị sửa hoặc xoá              │
-  │  • ĐÂY mới là thứ package và voucher tham chiếu           │
+  │  service_snapshots  (immutable — bất biến, append-only)     │
+  │  • bản sao đầy đủ đóng băng lúc publish (snapshot_data)     │
+  │  • snapshot_id = UUID cố định; version v+1 mỗi lần publish  │
+  │  • snapshot cũ không bao giờ bị sửa hoặc xoá                │
+  │  • ĐÂY mới là thứ package và voucher tham chiếu             │
   └────────────────────────────┬────────────────────────────────┘
                                │
   Tương tự với giá:            │
   ┌─────────────────────────────────────────────────────────────┐
-  │  price_history  (append-only)                              │
-  │  ┌──────────┬───────────────┬─────────────┬────────────┐  │
-  │  │ price_id │ effective_from│ effective_to│   amount   │  │
-  │  ├──────────┼───────────────┼─────────────┼────────────┤  │
-  │  │  uuid-1  │  2024-01-01   │ 2024-06-01  │  100.000   │  │  ← không xoá
-  │  │  uuid-2  │  2024-06-01   │    NULL     │  120.000   │  │  ← row mới
-  │  └──────────┴───────────────┴─────────────┴────────────┘  │
+  │  price_history  (append-only)                               │
+  │  ┌──────────┬───────────────┬─────────────┬────────────┐    │
+  │  │ price_id │ effective_from│ effective_to│   amount   │    │
+  │  ├──────────┼───────────────┼─────────────┼────────────┤    │
+  │  │  uuid-1  │  2024-01-01   │ 2024-06-01  │  100.000   │    │  ← không xoá
+  │  │  uuid-2  │  2024-06-01   │    NULL     │  120.000   │    │  ← row mới
+  │  └──────────┴───────────────┴─────────────┴────────────┘    │
   └─────────────────────────────────────────────────────────────┘
 
   Tương tự ở M2:
@@ -107,11 +107,11 @@ Quyết định: **D4**, **D5**
 ```
   Mô hình 5 thành phần cho mỗi dòng entitlement:
   ┌──────────────────────────────────────────────────────────────┐
-  │  Giá bán = NCC share + Platform fee + ACE margin            │
-  │            + VAT(NCC) + VAT(ACE)                            │
+  │  Giá bán = NCC share + Platform fee + ACE margin             │
+  │            + VAT(NCC) + VAT(ACE)                             │
   │                                                              │
-  │  platform_fee_pct + ace_margin_pct + ncc_share_pct = 100%  │
-  │  Bắt buộc bởi CHECK constraint tại DB — không thể thiếu.   │
+  │  platform_fee_pct + ace_margin_pct + ncc_share_pct = 100%    │
+  │  Bắt buộc bởi CHECK constraint tại DB — không thể thiếu.     │
   └──────────────────────────────────────────────────────────────┘
 
   Tham chiếu liên service:
@@ -144,13 +144,13 @@ Quyết định: **D1**, **D7**, **D8**
 
   Atomic capacity update (chặn overbooking):
   ┌─────────────────────────────────────────────────────────────┐
-  │  UPDATE inventory                                          │
-  │  SET capacity_used = capacity_used + $qty                  │
-  │  WHERE slot_id = $1                                        │
-  │    AND capacity_used + $qty <=                             │
-  │        FLOOR(capacity_total * (1 + overbook_pct / 100.0)) │
-  │  RETURNING slot_id;                                        │
-  │  -- 0 rows → hết chỗ; 1 row → thành công                 │
+  │  UPDATE inventory                                           │
+  │  SET capacity_used = capacity_used + $qty                   │
+  │  WHERE slot_id = $1                                         │
+  │    AND capacity_used + $qty <=                              │
+  │        FLOOR(capacity_total * (1 + overbook_pct / 100.0))   │
+  │  RETURNING slot_id;                                         │
+  │  -- 0 rows → hết chỗ; 1 row → thành công                    │
   └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -183,7 +183,7 @@ Publish Kafka trước, commit DB sau cũng không giải quyết được — n
   │  UPDATE services SET status = 'active'                   │
   │  INSERT INTO outbox (event_type, payload)                │
   │         VALUES ('service.approved', '{...}')             │
-  │  COMMIT  ← atomic: cả hai cùng thành công hoặc cùng fail│
+  │  COMMIT  ← atomic: cả hai cùng thành công hoặc cùng fail │
   └──────────────────────────────────────────────────────────┘
            │
            │  (DB đã commit, outbox row tồn tại)
@@ -202,7 +202,7 @@ Publish Kafka trước, commit DB sau cũng không giải quyết được — n
   ┌──────────────────────────────────────────────────────────┐
   │  Consumer phải idempotent                                │
   │  INSERT INTO processed_events (event_id)                 │
-  │  ON CONFLICT DO NOTHING  ← skip nếu đã xử lý            │
+  │  ON CONFLICT DO NOTHING  ← skip nếu đã xử lý             │
   └──────────────────────────────────────────────────────────┘
 ```
 
@@ -214,7 +214,7 @@ Quyết định: **D11**
 
 ```
  ┌────────────────────────────────────────────────────────────────────────────┐
- │                         M1 + M2 — LUỒNG NGHIỆP VỤ                         │
+ │                         M1 + M2 — LUỒNG NGHIỆP VỤ                          │
  └────────────────────────────────────────────────────────────────────────────┘
 
   ┌──────────────┐
@@ -223,54 +223,54 @@ Quyết định: **D11**
          │ 1. tự đăng ký hoặc ACE mời
          ▼
   ┌──────────────────────────────────────────────────────────────┐
-  │  M1: Onboarding — thu thập pháp nhân, MST, ngân hàng,      │
-  │  airport_scope, sync_mode, hồ sơ pháp lý                   │
+  │  M1: Onboarding — thu thập pháp nhân, MST, ngân hàng,        │
+  │  airport_scope, sync_mode, hồ sơ pháp lý                     │
   └──────────────────────┬───────────────────────────────────────┘
          │ 2. ACE Admin review KYC (thủ công)
          ▼
   ┌──────────────────────────────────────────────────────────────┐
-  │  M1: Supplier → active  │  event: supplier.onboarded        │
+  │  M1: Supplier → active  │  event: supplier.onboarded         │
   └──────────────────────┬───────────────────────────────────────┘
          │ 3. nhà cung ứng khai báo dịch vụ
          ▼
   ┌──────────────────────────────────────────────────────────────┐
-  │  M1: Service review — tên, loại, sân bay, giá, capacity     │
-  │  INSERT price_history row (append-only)                     │
-  │  Tạo inventory slots                                        │
+  │  M1: Service review — tên, loại, sân bay, giá, capacity      │
+  │  INSERT price_history row (append-only)                      │
+  │  Tạo inventory slots                                         │
   └──────────────────────┬───────────────────────────────────────┘
          │ 4. ACE Admin phê duyệt
          ▼
   ┌──────────────────────────────────────────────────────────────┐
-  │  M1: service_snapshot tạo (bất biến, v1)                   │
-  │  event: service.approved → Kafka                            │
+  │  M1: service_snapshot tạo (bất biến, v1)                     │
+  │  event: service.approved → Kafka                             │
   └──────────────────────┬───────────────────────────────────────┘
          │ snapshot_id sẵn sàng cho M2
          ▼
   ┌──────────────────────────────────────────────────────────────┐
-  │  M2: PM xây dựng gói                                       │
-  │  1. chọn snapshots đã duyệt từ M1                          │
-  │  2. đặt phạm vi: sân bay, kênh, thời gian hiệu lực        │
-  │  3. cấu hình giá + margin (sàn margin được kiểm soát)      │
-  │  4. đặt targeting rules (allow/deny, tối đa 5 cấp)        │
-  │  5. cấu hình revenue split theo từng dòng entitlement      │
-  │  6. thêm khuyến mại, preview targeting                     │
+  │  M2: PM xây dựng gói                                         │
+  │  1. chọn snapshots đã duyệt từ M1                            │
+  │  2. đặt phạm vi: sân bay, kênh, thời gian hiệu lực           │
+  │  3. cấu hình giá + margin (sàn margin được kiểm soát)        │
+  │  4. đặt targeting rules (allow/deny, tối đa 5 cấp)           │
+  │  5. cấu hình revenue split theo từng dòng entitlement        │
+  │  6. thêm khuyến mại, preview targeting                       │
   └──────────────────────┬───────────────────────────────────────┘
          │ 5. submit → ACE phê duyệt
          ▼
   ┌──────────────────────────────────────────────────────────────┐
-  │  M2: package_version tạo (bất biến)                        │
-  │  revenue_split version khoá                                 │
-  │  event: package.published → Kafka                           │
+  │  M2: package_version tạo (bất biến)                          │
+  │  revenue_split version khoá                                  │
+  │  event: package.published → Kafka                            │
   └──────────────────────┬───────────────────────────────────────┘
          │ version_id sẵn sàng cho M6 catalog
          ▼
   ┌──────────────────────────────────────────────────────────────┐
-  │  M6 Marketplace (downstream — ngoài phạm vi ADR này)       │
+  │  M6 Marketplace (downstream — ngoài phạm vi ADR này)         │
   └──────────────────────────────────────────────────────────────┘
 
 
  ┌────────────────────────────────────────────────────────────────────────────┐
- │                     CASCADE KHI UPSTREAM THAY ĐỔI                         │
+ │                     CASCADE KHI UPSTREAM THAY ĐỔI                          │
  └────────────────────────────────────────────────────────────────────────────┘
 
   event: price.changed (Kafka)
