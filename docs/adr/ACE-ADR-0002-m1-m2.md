@@ -189,16 +189,16 @@ Publish Kafka trước, commit DB sau cũng không giải quyết được — n
            │  (DB đã commit, outbox row tồn tại)
            ▼
   ┌──────────────────────────────────────────────────────────┐
-  │  Outbox Relay (background goroutine)                     │
-  │  SELECT ... FROM outbox WHERE status='pending'           │
-  │  FOR UPDATE SKIP LOCKED  ← nhiều instance không conflict │
-  │                                                          │
-  │  kafka.Publish(event)                                    │
-  │  UPDATE outbox SET status='published'                    │
+  │  Outbox Dispatcher — 2 phương án, xem D11:               │
+  │  A) Polling Relay: goroutine SELECT ... FOR UPDATE       │
+  │     SKIP LOCKED mỗi 500ms → kafka.Publish → mark         │
+  │     'published' (chọn cho Phase 1)                       │
+  │  B) Debezium CDC: đọc WAL qua logical replication,       │
+  │     không polling, publish gần real-time (nâng cấp sau)  │
   └──────────────────────────────────────────────────────────┘
            │
-           ▼  (có thể publish trùng nếu relay crash sau publish
-               nhưng trước khi mark 'published')
+           ▼  (cả hai phương án chỉ đảm bảo at-least-once —
+               có thể publish trùng)
   ┌──────────────────────────────────────────────────────────┐
   │  Consumer phải idempotent                                │
   │  INSERT INTO processed_events (event_id)                 │
@@ -903,18 +903,60 @@ CREATE TABLE m2_package.audit_log (
 
 ### D11 — Transactional Outbox Pattern cho Kafka publishing
 
-**Quyết định:** Mỗi service (M1, M2) có bảng `outbox` trong schema của nó. Khi một use case cần phát sinh Kafka event, thay vì gọi Kafka trực tiếp, service INSERT một row vào `outbox` trong cùng DB transaction với entity change. Một background goroutine (Outbox Relay) poll bảng `outbox` mỗi 500ms, publish lên Kafka, rồi mark `status = 'published'`. Relay dùng `SELECT ... FOR UPDATE SKIP LOCKED` để nhiều instance chạy song song không conflict. Consumer phía nhận phải idempotent — dùng bảng `processed_events` với `ON CONFLICT DO NOTHING` để bỏ qua duplicate.
+**Quyết định:** Mỗi service (M1, M2) có bảng `outbox` trong schema của nó. Khi một use case cần phát sinh Kafka event, thay vì gọi Kafka trực tiếp, service INSERT một row vào `outbox` trong cùng DB transaction với entity change — atomic với entity change, không có khoảng hở giữa DB commit và event publish. Có hai phương án cho phần "đọc outbox và đẩy lên Kafka" (outbox dispatcher); ACE chọn **Phương án A (Polling Relay)** cho Phase 1 và cân nhắc **Phương án B (Debezium CDC)** khi quy mô event tăng.
 
-**Lý do:** Không có distributed transaction giữa Aurora PostgreSQL và Amazon MSK. Cách publish Kafka sau khi commit DB tạo khoảng thời gian crash có thể mất message vĩnh viễn — M2 không nhận được `service.approved` nên không thể kéo snapshot mới, cascade không xảy ra, hệ thống silent inconsistent mà không có cảnh báo nào.
+**Phương án A — Polling Relay (background goroutine tự viết):**
 
-**Đánh đổi:**
+```
+  Một background goroutine (Outbox Relay) poll bảng outbox mỗi 500ms:
+  SELECT ... FROM outbox WHERE status='pending'
+  FOR UPDATE SKIP LOCKED     ← nhiều instance không conflict
+  kafka.Publish(event)
+  UPDATE outbox SET status='published'
+```
+
+Relay chạy trong cùng codebase Go của service, dùng `status` (`pending`/`published`/`failed`) và `retry_count` để theo dõi tiến độ publish.
+
+**Phương án B — Debezium CDC (logical replication, không polling):**
+
+```
+  Debezium Postgres Connector (chạy trong Kafka Connect)
+  đọc logical replication slot (WAL) của Aurora — KHÔNG query bảng outbox
+  Outbox Event Router SMT:
+    - route theo aggregate_type → đúng Kafka topic
+    - payload JSONB → Kafka message value
+  Publish lên Kafka ngay khi transaction commit xuất hiện trong WAL
+```
+
+Với phương án này, bảng `outbox` không cần `status`/`retry_count` vì không relay nào cập nhật trạng thái — WAL đã capture sự kiện tại thời điểm commit bất kể row sau đó còn hay đã bị dọn.
+
+Ở cả hai phương án, consumer phía nhận vẫn phải idempotent — dùng bảng `processed_events` với `ON CONFLICT DO NOTHING` để bỏ qua duplicate, vì cả polling relay lẫn Debezium đều chỉ đảm bảo at-least-once, không phải exactly-once.
+
+**Lý do:** Không có distributed transaction giữa Aurora PostgreSQL và Amazon MSK. Cách publish Kafka sau khi commit DB tạo khoảng thời gian crash có thể mất message vĩnh viễn — M2 không nhận được `service.approved` nên không thể kéo snapshot mới, cascade không xảy ra, hệ thống silent inconsistent mà không có cảnh báo nào. Cả hai phương án đều đóng khoảng hở này bằng cách tách "ghi event" (trong transaction) khỏi "gửi event" (ngoài transaction); khác biệt chỉ ở cách đọc outbox.
+
+**So sánh Polling Relay vs Debezium CDC:**
+
+| Tiêu chí | Phương án A — Polling Relay | Phương án B — Debezium CDC |
+|---|---|---|
+| Latency | ~500ms (chu kỳ poll) dù hệ thống rảnh | Gần real-time (sub-100ms) — đọc WAL ngay khi commit |
+| Tải lên DB | SELECT lặp lại mỗi 500ms + `FOR UPDATE SKIP LOCKED` trên mọi instance | Không query bảng — tail WAL stream Postgres vốn đã ghi cho replication |
+| Schema `outbox` | Cần `status`, `retry_count` để theo dõi state machine pending→published→failed | Không cần `status`/`retry_count` — schema gọn hơn |
+| Hạ tầng bổ sung | Không — chạy trong process Go hiện có | Cần Kafka Connect cluster + Debezium connector (thành phần vận hành mới) |
+| Yêu cầu DB | Không đổi | Phải bật `wal_level=logical` trên Aurora — tăng WAL retention, ảnh hưởng storage/failover |
+| Rủi ro vận hành | Relay crash → outbox tích luỹ, dễ phát hiện qua `retry_count`/queue depth | Connector down lâu → replication slot bị giữ, WAL phình to không giới hạn cho tới khi connector chạy lại hoặc slot bị drop |
+| Độ phức tạp triển khai | Thấp — team đã quen Go, không thêm dependency hạ tầng | Cao hơn — cần kỹ năng vận hành Kafka Connect/Debezium, cấu hình Outbox Event Router SMT |
+| Phù hợp | Phase 1 (một vài sân bay, event throughput thấp–vừa) | Khi throughput lớn hoặc latency 500ms không chấp nhận được (Phase 3–4) |
+
+**Đánh đổi (Phương án A — lựa chọn Phase 1):**
 
 | Lợi ích | Chi phí |
 |---------|---------|
 | Đảm bảo at-least-once delivery — event không bao giờ mất dù crash tại bất kỳ điểm nào | Relay tạo thêm ~500ms latency so với publish trực tiếp; chấp nhận được cho ACE Phase 1 |
 | Entity state và event luôn nhất quán — không có trạng thái "DB đã thay đổi nhưng event chưa gửi" | Consumer bắt buộc phải idempotent — thêm bảng `processed_events` và kiểm tra trước khi xử lý |
-| Không cần distributed transaction hay saga orchestrator phức tạp | `outbox` tăng trưởng theo thời gian; cần job dọn row `published` cũ hơn 7 ngày |
+| Không cần distributed transaction, saga orchestrator, hay hạ tầng Kafka Connect/Debezium phức tạp | `outbox` tăng trưởng theo thời gian; cần job dọn row `published` cũ hơn 7 ngày |
 | Nhiều relay instance chạy song song an toàn nhờ `SKIP LOCKED` | Nếu Kafka down kéo dài, `outbox` tích luỹ; cần alert khi `retry_count > 3` |
+
+**Đường nâng cấp:** Nếu Phase 3–4 cần latency thấp hơn 500ms hoặc polling tạo tải DB đáng kể, chuyển sang Debezium CDC là migration tương thích ngược — bảng `outbox` giữ nguyên PK/columns cốt lõi (`aggregate_type`, `aggregate_id`, `event_type`, `payload`), chỉ cần bổ sung `wal_level=logical`, triển khai Kafka Connect, và có thể loại bỏ `status`/`retry_count` sau khi tắt relay cũ.
 
 ---
 
