@@ -9,12 +9,13 @@ M1 và M2 tạo thành lớp cung ứng và lớp sản phẩm của nền tản
 - **M1:** Dịch vụ nào đang tồn tại, ai cung cấp, giá bao nhiêu, còn bao nhiêu năng lực phục vụ?
 - **M2:** Các dịch vụ đó được đóng gói thành sản phẩm bán được như thế nào, định giá ra sao, và hiển thị cho đúng người mua nào?
 
-Bốn thách thức cốt lõi chi phối mọi quyết định kiến trúc và thiết kế database trong tài liệu này:
+Năm thách thức cốt lõi chi phối mọi quyết định kiến trúc và thiết kế database trong tài liệu này:
 
 1. **Tính bất biến** — giá, định nghĩa dịch vụ và cấu hình gói được thoả thuận tại thời điểm giao dịch không bao giờ được thay đổi hồi tố, dù nhà cung ứng có chỉnh sửa metadata hay giá thay đổi về sau.
 2. **Thương mại hoá có kiểm soát** — không có dịch vụ hay gói nào đến tay người mua mà không qua cổng phê duyệt thuộc ACE; nhà cung ứng và Product Manager không thể tự publish thẳng ra marketplace.
 3. **Tính toàn vẹn tài chính** — revenue split giữa ACE và từng nhà cung ứng phải được khoá tại thời điểm bán và có thể truy vết về đúng điều khoản thương mại hiệu lực tại thời điểm đó; tham chiếu liên service dùng UUID thay vì FK để M1 và M2 deploy độc lập.
 4. **Hiệu năng ở quy mô lớn** — từ Phase 1 (một vài sân bay) đến Phase 4 (đa quốc gia, > 10M rows) mà không cần viết lại schema hay query.
+5. **Tính tin cậy của message publishing** — sự kiện Kafka (`service.approved`, `price.changed`, `package.published`) phải được đảm bảo gửi đúng một lần; crash giữa chừng không được làm mất event hoặc để hệ thống rơi vào trạng thái không nhất quán giữa DB và message broker.
 
 ---
 
@@ -157,6 +158,58 @@ Quyết định: **D9**, **D10**
 
 ---
 
+### Thách thức 5 — Tính tin cậy của message publishing
+
+**Vấn đề:** M1 và M2 phát sinh Kafka events tại các điểm chuyển trạng thái quan trọng (`service.approved`, `price.changed`, `package.published`). Cách triển khai naive — commit DB trước, publish Kafka sau — tạo khoảng thời gian nguy hiểm:
+
+```
+  UPDATE services SET status='active'
+  tx.Commit()                        ← DB đã ghi, không rollback được
+  kafka.Publish("service.approved")  ← crash tại đây → message mất vĩnh viễn
+
+  Hệ quả: M2 không biết service đã approved
+          → package không thể kéo snapshot mới
+          → PM tưởng hệ thống bị treo, tự thao tác lại → duplicate state
+```
+
+Publish Kafka trước, commit DB sau cũng không giải quyết được — nếu DB commit fail, event đã đến consumer và gây side-effect không có bản ghi tương ứng.
+
+**Giải pháp — Transactional Outbox Pattern:**
+
+```
+  Trong cùng 1 DB transaction:
+  ┌──────────────────────────────────────────────────────────┐
+  │  BEGIN                                                   │
+  │  UPDATE services SET status = 'active'                   │
+  │  INSERT INTO outbox (event_type, payload)                │
+  │         VALUES ('service.approved', '{...}')             │
+  │  COMMIT  ← atomic: cả hai cùng thành công hoặc cùng fail│
+  └──────────────────────────────────────────────────────────┘
+           │
+           │  (DB đã commit, outbox row tồn tại)
+           ▼
+  ┌──────────────────────────────────────────────────────────┐
+  │  Outbox Relay (background goroutine)                     │
+  │  SELECT ... FROM outbox WHERE status='pending'           │
+  │  FOR UPDATE SKIP LOCKED  ← nhiều instance không conflict │
+  │                                                          │
+  │  kafka.Publish(event)                                    │
+  │  UPDATE outbox SET status='published'                    │
+  └──────────────────────────────────────────────────────────┘
+           │
+           ▼  (có thể publish trùng nếu relay crash sau publish
+               nhưng trước khi mark 'published')
+  ┌──────────────────────────────────────────────────────────┐
+  │  Consumer phải idempotent                                │
+  │  INSERT INTO processed_events (event_id)                 │
+  │  ON CONFLICT DO NOTHING  ← skip nếu đã xử lý            │
+  └──────────────────────────────────────────────────────────┘
+```
+
+Quyết định: **D11**
+
+---
+
 ## Luồng hệ thống tổng thể
 
 ```
@@ -237,6 +290,7 @@ Quyết định: **D9**, **D10**
                          ──────< price_history       (append-only)
                          ──────< inventory ──────────< reservations (TTL 15p)
   audit_log
+  outbox  (relay → Kafka)
 
   M2 (schema: m2_package)
   packages ──< package_versions (immutable) ──< package_items  ──▶ M1 snapshot_id
@@ -452,7 +506,29 @@ CREATE TABLE m1_supply.audit_log (
     reason       TEXT,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 ) PARTITION BY RANGE (created_at);
+
+-- ----------------------------------------------------------------
+-- OUTBOX (Transactional Outbox Pattern — D11)
+-- INSERT trong cùng transaction với entity change.
+-- Relay đọc và publish lên Kafka; không bao giờ DELETE row.
+-- ----------------------------------------------------------------
+CREATE TABLE m1_supply.outbox (
+    id             UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    aggregate_type VARCHAR(50)  NOT NULL,
+    aggregate_id   UUID         NOT NULL,
+    event_type     VARCHAR(100) NOT NULL,
+    payload        JSONB        NOT NULL,
+    status         VARCHAR(20)  NOT NULL DEFAULT 'pending'
+                       CHECK (status IN ('pending','published','failed')),
+    retry_count    INT          NOT NULL DEFAULT 0,
+    created_at     TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    published_at   TIMESTAMPTZ
+);
+
+CREATE INDEX ON m1_supply.outbox (status, created_at) WHERE status = 'pending';
 ```
+
+> M2 có bảng `outbox` tương tự trong schema `m2_package` với cấu trúc giống hệt.
 
 ### M2 — Schema `m2_package`
 
@@ -825,6 +901,23 @@ CREATE TABLE m2_package.audit_log (
 
 ---
 
+### D11 — Transactional Outbox Pattern cho Kafka publishing
+
+**Quyết định:** Mỗi service (M1, M2) có bảng `outbox` trong schema của nó. Khi một use case cần phát sinh Kafka event, thay vì gọi Kafka trực tiếp, service INSERT một row vào `outbox` trong cùng DB transaction với entity change. Một background goroutine (Outbox Relay) poll bảng `outbox` mỗi 500ms, publish lên Kafka, rồi mark `status = 'published'`. Relay dùng `SELECT ... FOR UPDATE SKIP LOCKED` để nhiều instance chạy song song không conflict. Consumer phía nhận phải idempotent — dùng bảng `processed_events` với `ON CONFLICT DO NOTHING` để bỏ qua duplicate.
+
+**Lý do:** Không có distributed transaction giữa Aurora PostgreSQL và Amazon MSK. Cách publish Kafka sau khi commit DB tạo khoảng thời gian crash có thể mất message vĩnh viễn — M2 không nhận được `service.approved` nên không thể kéo snapshot mới, cascade không xảy ra, hệ thống silent inconsistent mà không có cảnh báo nào.
+
+**Đánh đổi:**
+
+| Lợi ích | Chi phí |
+|---------|---------|
+| Đảm bảo at-least-once delivery — event không bao giờ mất dù crash tại bất kỳ điểm nào | Relay tạo thêm ~500ms latency so với publish trực tiếp; chấp nhận được cho ACE Phase 1 |
+| Entity state và event luôn nhất quán — không có trạng thái "DB đã thay đổi nhưng event chưa gửi" | Consumer bắt buộc phải idempotent — thêm bảng `processed_events` và kiểm tra trước khi xử lý |
+| Không cần distributed transaction hay saga orchestrator phức tạp | `outbox` tăng trưởng theo thời gian; cần job dọn row `published` cũ hơn 7 ngày |
+| Nhiều relay instance chạy song song an toàn nhờ `SKIP LOCKED` | Nếu Kafka down kéo dài, `outbox` tích luỹ; cần alert khi `retry_count > 3` |
+
+---
+
 ## Hệ quả
 
 | Thách thức | Đảm bảo | Lưu ý |
@@ -833,6 +926,7 @@ CREATE TABLE m2_package.audit_log (
 | **Thương mại hoá có kiểm soát** | Không có service hay package nào vào pipeline thương mại mà không qua ACE approval. Cascade Kafka tự paused package khi service thành phần có sự cố trong < 500ms. | ACE Admin review queue là rủi ro điểm nghẽn. Pre-validation checks (completeness, price sanity) nên tự động hoá trong submit workflow. |
 | **Tính toàn vẹn tài chính** | Revenue split CHECK constraint tổng = 100% tại DB. Split version khoá tại checkout. Schema riêng biệt giữ M1/M2 deploy độc lập. | Split `effective_from` phải phối hợp với contract activation trong M7. Dangling UUID references (M2 trỏ snapshot đã archive trong M1) cần audit job định kỳ kiểm tra. |
 | **Hiệu năng** | Atomic inventory UPDATE chặn race condition overbooking. Partitioning giữ query performance khi > 10M rows mà không rewrite query. | Partition LIST cần script tự động tạo partition mới khi mở sân bay. Index nên monitor bằng `pg_stat_user_indexes` sau khi có traffic thực — không thêm index speculative. |
+| **Tính tin cậy message** | Outbox Pattern đảm bảo at-least-once delivery — không có event nào bị mất dù crash tại bất kỳ điểm nào trong luồng xử lý. | Consumer phải idempotent. Cần alert khi `outbox.retry_count > 3` (Kafka có thể down). Job dọn row `published` cũ hơn 7 ngày để tránh bảng phình to. |
 
 **Hệ quả bổ sung:**
 
