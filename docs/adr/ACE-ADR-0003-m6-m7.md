@@ -47,9 +47,9 @@ Sáu thách thức cốt lõi chi phối mọi quyết định kiến trúc và 
   └────────────────────────────┬────────────────────────────────┘
                                │
   ┌─────────────────────────────────────────────────────────────┐
-  │  quotes.snapshot_data (JSONB)                                │
+  │  quotes.snapshot_data (JSONB)                               │
   │  • đóng băng package, số lượng, giá, buyer entity, điều     │
-  │    khoản thương mại tại thời điểm tạo quote                  │
+  │    khoản thương mại tại thời điểm tạo quote                 │
   │  • hiệu lực 48 giờ; hết hạn KHÔNG được dùng lại tạo order   │
   └────────────────────────────┬────────────────────────────────┘
                                │
@@ -61,7 +61,7 @@ Sáu thách thức cốt lõi chi phối mọi quyết định kiến trúc và 
   └────────────────────────────┬────────────────────────────────┘
                                │
   ┌─────────────────────────────────────────────────────────────┐
-  │  vouchers.snapshot_data (JSONB)                              │
+  │  vouchers.snapshot_data (JSONB)                             │
   │  • giá, entitlement, airport, timeslot, điều kiện sử dụng,  │
   │    redemption_limit — đóng băng tại thời điểm issue         │
   └────────────────────────────┬────────────────────────────────┘
@@ -116,8 +116,8 @@ Quyết định: **D3**, **D5**, **D8**
         ▼
   M7 allotments (overlay có version, scope: partner × airport × service × channel × thời gian)
   ┌─────────────────┬──────────────────┬───────────┬──────────────────┐
-  │  HDBank          │  VietJet         │  Buffer   │  Free-sell B2C   │
-  │  30 ghế          │  20 ghế          │  10 ghế   │  40 ghế          │
+  │  HDBank         │  VietJet         │  Buffer   │  Free-sell B2C   │
+  │  30 ghế         │  20 ghế          │  10 ghế   │  40 ghế          │
   └─────────────────┴──────────────────┴───────────┴──────────────────┘
         │
         ▼ Kiểm tra tại 4 điểm trong M6:
@@ -181,12 +181,12 @@ Quyết định: **D7**, **D8**, **D10**
   Khi giao dịch phát sinh ở M2/M6, resolve theo thứ tự:
   ┌─────────────────────────────────────────────────────────────┐
   │  1. Phạm vi cụ thể hơn thắng phạm vi chung                  │
-  │     (HDBank @ Long Thành thắng "mọi sân bay")                │
-  │  2. Nếu cùng độ cụ thể, priority cao hơn thắng               │
-  │  3. Nếu xung đột allow/deny, deny thắng allow                │
-  │  4. Nếu còn nhiều version hợp lệ, version mới nhất có hiệu   │
-  │     lực tại thời điểm giao dịch thắng                        │
-  │  Không resolve được → raise alert cho Partner Manager        │
+  │     (HDBank @ Long Thành thắng "mọi sân bay")               │
+  │  2. Nếu cùng độ cụ thể, priority cao hơn thắng              │
+  │  3. Nếu xung đột allow/deny, deny thắng allow               │
+  │  4. Nếu còn nhiều version hợp lệ, version mới nhất có hiệu  │
+  │     lực tại thời điểm giao dịch thắng                       │
+  │  Không resolve được → raise alert cho Partner Manager       │
   └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -206,19 +206,19 @@ Quyết định: **D9**, **D10**, **D13**
   Kiosk (mất kết nối):
   ┌─────────────────────────────────────────────────────────────┐
   │  Xác thực JWT cục bộ bằng public key RS256 đã cache (24h)   │
-  │  Kiểm tra trùng qua SQLite cục bộ trên thiết bị              │
-  │  Ghi nhận redeem vào hàng đợi cục bộ                         │
-  │  Khi có mạng lại: sync ngược lên ACE với idempotency_key     │
+  │  Kiểm tra trùng qua SQLite cục bộ trên thiết bị             │
+  │  Ghi nhận redeem vào hàng đợi cục bộ                        │
+  │  Khi có mạng lại: sync ngược lên ACE với idempotency_key    │
   │  Độ trễ đồng bộ ≤ 5 giây; sai lệch tồn kho tối đa ≤ 0,1%    │
   └─────────────────────────────────────────────────────────────┘
 
   Mỗi service (M6×3 + M7), trong cùng 1 DB transaction:
   ┌─────────────────────────────────────────────────────────────┐
-  │  BEGIN                                                       │
-  │  UPDATE <entity> SET status = '<new_state>'                  │
-  │  INSERT INTO outbox (event_type, payload)                    │
-  │  COMMIT                                                       │
-  └────────────────────────────┬──────────────────────────────────┘
+  │  BEGIN                                                      │
+  │  UPDATE <entity> SET status = '<new_state>'                 │
+  │  INSERT INTO outbox (event_type, payload)                   │
+  │  COMMIT                                                     │
+  └────────────────────────────┬────────────────────────────────┘
                                │
   Outbox Relay (SELECT ... FOR UPDATE SKIP LOCKED) → Kafka → published
   Consumer idempotent qua processed_events (ON CONFLICT DO NOTHING)
@@ -232,7 +232,7 @@ Quyết định: **D5**, **D12**
 
 ```
  ┌────────────────────────────────────────────────────────────────────────────┐
- │                    M6 + M7 — LUỒNG NGHIỆP VỤ TỔNG THỂ                     │
+ │                    M6 + M7 — LUỒNG NGHIỆP VỤ TỔNG THỂ                      │
  └────────────────────────────────────────────────────────────────────────────┘
 
   ┌──────────────┐
@@ -244,7 +244,7 @@ Quyết định: **D5**, **D12**
   │  M7: Partner đã Active, Contract đã Active                   │
   │  Commercial Terms resolve: scope, giá, billing model, SLA,   │
   │  allotment/quota — cung cấp cho M2 (đã dùng ở ADR-0002)      │
-  │  và M6 (dùng ở luồng dưới đây)                                │
+  │  và M6 (dùng ở luồng dưới đây)                               │
   └──────┬───────────────────────────────────────────────────────┘
          │ 1. B2B Customer browse Marketplace
          ▼
@@ -259,43 +259,43 @@ Quyết định: **D5**, **D12**
   │  Quote (snapshot 48h)     │         │  Checkout trực tiếp       │
   │  Upload PO → ACE duyệt    │         │  Kiểm tra cứng: giá,      │
   └──────────┬────────────────┘         │  capacity, allotment,     │
-             │                          │  commercial terms          │
+             │                          │  commercial terms         │
              └──────────┬───────────────┴───────────────────────────┘
                         ▼
   ┌──────────────────────────────────────────────────────────────┐
-  │  Order confirmed (idempotency_key)                            │
+  │  Order confirmed (idempotency_key)                           │
   │  order_items khoá package_version_id + price_snapshot +      │
-  │  commercial_term_version_id + revenue_split_version_id        │
-  │  event: order.confirmed → Kafka                                │
-  │  ──▶ M1: reservation giữ chỗ inventory (giai đoạn 1)          │
+  │  commercial_term_version_id + revenue_split_version_id       │
+  │  event: order.confirmed → Kafka                              │
+  │  ──▶ M1: reservation giữ chỗ inventory (giai đoạn 1)         │
   └──────┬───────────────────────────────────────────────────────┘
          │ 3. thanh toán đủ điều kiện theo payment mode
          ▼
   ┌──────────────────────────────────────────────────────────────┐
   │  M6 Voucher: phát hành voucher (snapshot bất biến, JWT ký)   │
   │  mỗi entitlement unit → 1 voucher; idempotency per issue     │
-  │  event: voucher.issued → Kafka                                 │
+  │  event: voucher.issued → Kafka                               │
   └──────┬───────────────────────────────────────────────────────┘
          │ 4. redeem tại điểm dịch vụ (online hoặc offline)
          ▼
   ┌──────────────────────────────────────────────────────────────┐
   │  M6 Voucher: redeem — xác thực JWT, kiểm tra trùng,          │
-  │  kiểm tra airport/timeslot/scope                              │
+  │  kiểm tra airport/timeslot/scope                             │
   │  ──▶ M1: reservation xác nhận (giai đoạn 2 — tiêu thụ thực)  │
-  │  event: voucher.redeemed → Kafka                               │
+  │  event: voucher.redeemed → Kafka                             │
   └──────┬───────────────────────────────────────────────────────┘
          │ 5. chu kỳ đối soát T+n (per supplier, mặc định T+1)
          ▼
   ┌──────────────────────────────────────────────────────────────┐
-  │  M6 Settlement: Reconciliation — so khớp ACE/NCC/kiosk        │
-  │  → Matched/Mismatch/Adjusted/Reconciled                       │
+  │  M6 Settlement: Reconciliation — so khớp ACE/NCC/kiosk       │
+  │  → Matched/Mismatch/Adjusted/Reconciled                      │
   └──────┬───────────────────────────────────────────────────────┘
          │ 6. đủ 6 điều kiện quyết toán
          ▼
   ┌──────────────────────────────────────────────────────────────┐
-  │  M6 Settlement: Settlement (append-only)                      │
-  │  áp commercial_term_version_id + revenue_split_version_id     │
-  │  đã khoá tại order.confirmed — KHÔNG dùng version hiện hành   │
+  │  M6 Settlement: Settlement (append-only)                     │
+  │  áp commercial_term_version_id + revenue_split_version_id    │
+  │  đã khoá tại order.confirmed — KHÔNG dùng version hiện hành  │
   │  Ring 1: ACE ↔ NCC (M1) | Ring 2: ACE ↔ B2B Partner (M7)     │
   │  Finance duyệt → payment instruction (Phase 1: report-only)  │
   └──────┬───────────────────────────────────────────────────────┘
@@ -308,7 +308,7 @@ Quyết định: **D5**, **D12**
 
 
  ┌────────────────────────────────────────────────────────────────────────────┐
- │                     CASCADE KHI M1/M7 THAY ĐỔI                            │
+ │                     CASCADE KHI M1/M7 THAY ĐỔI                             │
  └────────────────────────────────────────────────────────────────────────────┘
 
   event: service.paused/deprecated (M1, Kafka)
