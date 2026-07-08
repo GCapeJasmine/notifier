@@ -270,10 +270,10 @@ Quyết định: **D11**
  └────────────────────────────────────────────────────────────────────────────┘
 
   event: price.changed (Kafka)
-  ──▶ M2 consumer: package chứa snapshot_id → pending_review, tạm dừng bán
+  ──▶ M2 consumer: package chứa snapshot_id → draft, tạm dừng bán, alert PM
 
   event: service.paused (Kafka)
-  ──▶ M2 consumer: package chứa snapshot_id → paused, cảnh báo PM
+  ──▶ M2 consumer: package chứa snapshot_id → paused, alert PM
 
 
  ┌────────────────────────────────────────────────────────────────────────────┐
