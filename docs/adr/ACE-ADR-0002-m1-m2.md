@@ -244,7 +244,6 @@ Quyết định: **D11**
          ▼
   ┌──────────────────────────────────────────────────────────────┐
   │  M1: service_snapshot tạo (bất biến, v1)                     │
-  │  KHÔNG phát Kafka event — snapshot sẵn sàng qua API           │
   └──────────────────────┬───────────────────────────────────────┘
          │ snapshot_id truy vấn qua GET /v1/services/{id}/snapshots
          │ khi PM chủ động xây dựng gói (pull, không cần realtime)
