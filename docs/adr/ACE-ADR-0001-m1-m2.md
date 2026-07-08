@@ -127,11 +127,13 @@ Quyết định: **D1**, **D7**, **D8**
 **Giải pháp — Partitioning + atomic UPDATE:**
 
 ```
-  Partitioning:
-  services, inventory ──▶ PARTITION BY LIST (airport_code)
-                          query SGN chỉ scan partition SGN
-  audit_log, price_history ──▶ PARTITION BY RANGE (created_at) monthly
-                               DROP partition cũ thay vì DELETE
+  Partitioning (Phase 1):
+  audit_log ──▶ PARTITION BY RANGE (created_at) monthly
+               DROP partition cũ thay vì DELETE
+  services, inventory, price_history ──▶ KHÔNG partition
+               B-tree index thường trên airport_code (services/
+               inventory) và EXCLUDE GIST sẵn có (price_history)
+               đủ cho query "chỉ scan 1 sân bay" ở quy mô Phase 1
 
   Atomic capacity update (chặn overbooking):
   ┌─────────────────────────────────────────────────────────────┐
@@ -362,11 +364,10 @@ CREATE INDEX ON m1_supply.suppliers USING GIN (airport_scope);
 -- ----------------------------------------------------------------
 -- SERVICES (mutable)
 -- Không được tham chiếu trực tiếp bởi package/voucher.
--- Chưa partition ở Phase 1 (D10) — PARTITION BY LIST (airport_code)
--- yêu cầu airport_code nằm trong PK, việc này sẽ đổi shape của mọi FK
--- trỏ vào service_id (service_snapshots, price_history, inventory) nên
--- được để lại cho migration riêng khi thực sự vượt ngưỡng 10M rows.
--- Index trên airport_code bên dưới là giải pháp tạm thời.
+-- KHÔNG partition (D10) — PARTITION BY LIST (airport_code) đòi hỏi
+-- airport_code nằm trong PK, kéo theo mọi FK trỏ vào service_id
+-- (service_snapshots, price_history, inventory) phải đổi shape.
+-- Index trên airport_code bên dưới là thiết kế Phase 1.
 -- ----------------------------------------------------------------
 CREATE TABLE m1_supply.services (
     service_id          UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -428,9 +429,9 @@ ALTER TABLE m1_supply.services
 -- PRICE HISTORY (append-only)
 -- Khi giá thay đổi: INSERT row mới, KHÔNG UPDATE row cũ.
 -- EXCLUDE GIST (cần extension btree_gist ở trên) chặn hai specific
--- price chồng lấp thời gian. Chưa partition ở Phase 1 (D10): RANGE BY
--- created_at sẽ xung đột với EXCLUDE constraint hiện tại (không định
--- nghĩa trên created_at) — cần thiết kế lại khi thực sự cần partition.
+-- price chồng lấp thời gian. KHÔNG partition (D10): RANGE BY created_at
+-- sẽ xung đột với EXCLUDE constraint hiện tại (không định nghĩa trên
+-- created_at).
 -- ----------------------------------------------------------------
 CREATE TABLE m1_supply.price_history (
     price_id       UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -458,8 +459,8 @@ CREATE INDEX ON m1_supply.price_history (service_id, effective_from, effective_t
 -- INVENTORY / CAPACITY
 -- capacity_used cập nhật bằng atomic UPDATE (D9).
 -- allotment_held: phần capacity giữ riêng theo hợp đồng M7.
--- Chưa partition ở Phase 1 (D10), cùng lý do với services — xem index
--- trên airport_code bên dưới làm giải pháp tạm thời.
+-- KHÔNG partition (D10), cùng lý do với services — index trên
+-- airport_code bên dưới là thiết kế Phase 1.
 -- ----------------------------------------------------------------
 CREATE TABLE m1_supply.inventory (
     slot_id        UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -961,18 +962,18 @@ tại thời điểm `order.confirmed` (D3, D7).
 
 ---
 
-### D10 — Partitioning theo `airport_code` (LIST) và `created_at` (RANGE)
+### D10 — Partitioning cho `audit_log`; index thường cho `services`/`inventory`/`price_history`
 
-**Quyết định:** Chỉ `audit_log` (cả hai schema) dùng `PARTITION BY RANGE (created_at)` theo tháng ngay từ đầu — không có bảng nào FK vào `audit_log` nên PK có thể mở rộng thành `(log_id, created_at)` để thoả yêu cầu PostgreSQL (partition key phải nằm trong mọi PK/UNIQUE). `services`, `inventory` và `price_history` **chưa** partition ở Phase 1: `PARTITION BY LIST (airport_code)` sẽ buộc PK của `services`/`inventory` phải mở rộng thành `(airport_code, ...)`, kéo theo mọi FK trỏ vào `service_id` (từ `service_snapshots`, `price_history`, `inventory`, `reservations`) phải đổi thành composite key; `price_history` còn phức tạp hơn vì `EXCLUDE USING GIST` hiện định nghĩa trên `(service_id, price_type, tstzrange)`, không phải trên `created_at`, nên partition theo `created_at` sẽ không tương thích với constraint đó nếu không thiết kế lại. Việc partition ba bảng này được để lại cho một migration riêng khi thực sự vượt ngưỡng 10M rows; trong lúc chờ, `CREATE INDEX ... (airport_code)` trên `services` và `inventory` đóng vai trò giải pháp tạm để giữ mục tiêu "chỉ scan 1 sân bay".
+**Quyết định:** Chỉ `audit_log` (cả hai schema) dùng `PARTITION BY RANGE (created_at)` theo tháng — không có bảng nào FK vào `audit_log` nên PK có thể mở rộng thành `(log_id, created_at)` để thoả yêu cầu PostgreSQL (partition key phải nằm trong mọi PK/UNIQUE). `services`, `inventory` và `price_history` dùng B-tree index thường trên `airport_code` (và `EXCLUDE USING GIST` sẵn có cho `price_history`), **không** partition: `PARTITION BY LIST (airport_code)` sẽ buộc PK của `services`/`inventory` phải mở rộng thành `(airport_code, ...)`, kéo theo mọi FK trỏ vào `service_id` (từ `service_snapshots`, `price_history`, `inventory`, `reservations`) phải đổi thành composite key; `price_history` còn phức tạp hơn vì `EXCLUDE USING GIST` hiện định nghĩa trên `(service_id, price_type, tstzrange)`, không phải trên `created_at`. Đây là thiết kế cho Phase 1 của tài liệu này, không phải bước tạm chờ một migration khác.
 
-**Lý do:** Phần lớn query vận hành đều có filter `WHERE airport_code = X` — partition loại bỏ toàn bộ airport khác. Range partition theo tháng cho phép DROP partition cũ trong milliseconds thay vì DELETE hàng triệu rows. Nhưng partition ngay từ Phase 1 khi row count còn nhỏ (<1M) tạo rủi ro DDL không hợp lệ hoặc phải thiết kế lại constraint sớm — trong khi lợi ích (partition pruning) chưa cần thiết ở quy mô này.
+**Lý do:** Phần lớn query vận hành đều có filter `WHERE airport_code = X` — LIST partition sẽ loại bỏ toàn bộ airport khác, nhưng cái giá phải trả (composite PK/FK trên 5 bảng liên quan, thiết kế lại `EXCLUDE` constraint) chỉ đáng đánh đổi khi row count đủ lớn để partition pruning tạo khác biệt thật sự — chưa phải trường hợp ở quy mô Phase 1. Index B-tree trên `airport_code` đạt cùng mục tiêu "chỉ scan 1 sân bay" mà không cần đổi shape của các bảng liên quan. `audit_log` không có đánh đổi tương tự — không bảng nào FK vào nó — nên partition ngay từ đầu không tốn chi phí ở nơi khác, và cho phép DROP partition cũ trong milliseconds thay vì DELETE hàng triệu rows.
 
 **Đánh đổi:**
 
 | Lợi ích | Chi phí |
 |---------|---------|
-| `audit_log` DROP partition cũ nhanh hơn DELETE ngay từ Phase 1 | `services`/`inventory`/`price_history` chưa có partition pruning ở Phase 1 — bù bằng index thường trên `airport_code`, chấp nhận được vì row count còn nhỏ (<1M) |
-| Không phải thiết kế lại composite PK/FK hay `EXCLUDE` constraint ngay bây giờ | Cần script tạo partition + migration composite key/FK cho `services`/`inventory`/`price_history` khi vượt ngưỡng 10M rows — phải lên kế hoạch trước, không phải việc bật công tắc đơn giản |
+| `audit_log` DROP partition cũ nhanh hơn DELETE | `services`/`inventory`/`price_history` không có partition pruning — bù bằng index thường trên `airport_code` |
+| Không cần composite PK/FK trên `services`/`inventory`/`service_snapshots`/`price_history`/`reservations`, cũng không cần thiết kế lại `EXCLUDE` constraint | Query thiếu điều kiện lọc tốt vẫn phải quét toàn bảng — index không loại trừ hẳn dữ liệu airport khác như LIST partition làm được |
 
 ---
 
@@ -1000,7 +1001,7 @@ tại thời điểm `order.confirmed` (D3, D7).
 | **Tính bất biến** | Snapshot chain (service_snapshot → package_version → order_item) đảm bảo chỉnh sửa upstream không có tác động hồi tố. Price history append-only với GIST exclusion đảm bảo giá tại bất kỳ thời điểm nào đều truy vết được. | Snapshot và price_history tăng trưởng không giới hạn. Cần archival job: snapshot archive sau khi toàn bộ voucher tham chiếu đã expired/settled; price_history cũ rotate sang S3 sau retention window. |
 | **Thương mại hoá có kiểm soát** | Không có service hay package nào vào pipeline thương mại mà không qua ACE approval. Cascade Kafka tự paused package khi service thành phần có sự cố trong < 500ms. | ACE Admin review queue là rủi ro điểm nghẽn. Pre-validation checks (completeness, price sanity) nên tự động hoá trong submit workflow. |
 | **Tính toàn vẹn tài chính** | Revenue split CHECK constraint tổng = 100% tại DB. Split version khoá tại checkout. Schema riêng biệt giữ M1/M2 deploy độc lập. | Split `effective_from` phải phối hợp với contract activation trong M7. Dangling UUID references (M2 trỏ snapshot đã archive trong M1) cần audit job định kỳ kiểm tra. |
-| **Hiệu năng** | Atomic inventory UPDATE chặn race condition overbooking. Partitioning giữ query performance khi > 10M rows mà không rewrite query. | Partition LIST cần script tự động tạo partition mới khi mở sân bay. Index nên monitor bằng `pg_stat_user_indexes` sau khi có traffic thực — không thêm index speculative. |
+| **Hiệu năng** | Atomic inventory UPDATE chặn race condition overbooking. `audit_log` partition theo tháng giữ chi phí retention thấp. Index thường trên `airport_code` giữ query "1 sân bay" nhanh cho `services`/`inventory`/`price_history`. | Index nên monitor bằng `pg_stat_user_indexes` sau khi có traffic thực — không thêm index speculative. |
 | **Tính tin cậy message** | Outbox Pattern qua Debezium CDC đảm bảo at-least-once delivery — không có event nào bị mất dù crash tại bất kỳ điểm nào trong luồng xử lý. | Consumer phải idempotent. Cần alert khi Debezium connector down hoặc replication slot lag vượt ngưỡng (WAL tích tụ). Job dọn row `outbox` cũ hơn 7 ngày theo `created_at` để tránh bảng phình to. |
 
 **Hệ quả bổ sung:**
