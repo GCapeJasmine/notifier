@@ -32,29 +32,29 @@ Năm thách thức cốt lõi chi phối mọi quyết định kiến trúc và 
         │
         ▼
   ┌─────────────────────────────────────────────────────────────┐
-  │  services  (mutable — có thể sửa)                           │
-  │  • tên, mô tả, hình ảnh, điều kiện: chỉnh sửa tự do         │
-  │  • KHÔNG được tham chiếu trực tiếp bởi package hay voucher  │
+  │  services  (mutable — có thể sửa)                          │
+  │  • tên, mô tả, hình ảnh, điều kiện: chỉnh sửa tự do       │
+  │  • KHÔNG được tham chiếu trực tiếp bởi package hay voucher │
   └────────────────────────────┬────────────────────────────────┘
                                │  ACE phê duyệt → publish
                                ▼
   ┌─────────────────────────────────────────────────────────────┐
-  │  service_snapshots  (immutable — bất biến, append-only)     │
-  │  • bản sao đầy đủ đóng băng lúc publish (snapshot_data)     │
-  │  • snapshot_id = UUID cố định; version v+1 mỗi lần publish  │
-  │  • snapshot cũ không bao giờ bị sửa hoặc xoá                │
-  │  • ĐÂY mới là thứ package và voucher tham chiếu             │
+  │  service_snapshots  (immutable — bất biến, append-only)    │
+  │  • bản sao đầy đủ đóng băng lúc publish (snapshot_data)   │
+  │  • snapshot_id = UUID cố định; version v+1 mỗi lần publish │
+  │  • snapshot cũ không bao giờ bị sửa hoặc xoá              │
+  │  • ĐÂY mới là thứ package và voucher tham chiếu           │
   └────────────────────────────┬────────────────────────────────┘
                                │
   Tương tự với giá:            │
   ┌─────────────────────────────────────────────────────────────┐
-  │  price_history  (append-only)                               │
-  │  ┌──────────┬───────────────┬─────────────┬────────────┐    │
-  │  │ price_id │ effective_from│ effective_to│   amount   │    │
-  │  ├──────────┼───────────────┼─────────────┼────────────┤    │
-  │  │  uuid-1  │  2024-01-01   │ 2024-06-01  │  100.000   │    │  ← không xoá
-  │  │  uuid-2  │  2024-06-01   │    NULL     │  120.000   │    │  ← row mới
-  │  └──────────┴───────────────┴─────────────┴────────────┘    │
+  │  price_history  (append-only)                              │
+  │  ┌──────────┬───────────────┬─────────────┬────────────┐  │
+  │  │ price_id │ effective_from│ effective_to│   amount   │  │
+  │  ├──────────┼───────────────┼─────────────┼────────────┤  │
+  │  │  uuid-1  │  2024-01-01   │ 2024-06-01  │  100.000   │  │  ← không xoá
+  │  │  uuid-2  │  2024-06-01   │    NULL     │  120.000   │  │  ← row mới
+  │  └──────────┴───────────────┴─────────────┴────────────┘  │
   └─────────────────────────────────────────────────────────────┘
 
   Tương tự ở M2:
@@ -107,11 +107,11 @@ Quyết định: **D4**, **D5**
 ```
   Mô hình 5 thành phần cho mỗi dòng entitlement:
   ┌──────────────────────────────────────────────────────────────┐
-  │  Giá bán = NCC share + Platform fee + ACE margin             │
-  │            + VAT(NCC) + VAT(ACE)                             │
+  │  Giá bán = NCC share + Platform fee + ACE margin            │
+  │            + VAT(NCC) + VAT(ACE)                            │
   │                                                              │
-  │  platform_fee_pct + ace_margin_pct + ncc_share_pct = 100%    │
-  │  Bắt buộc bởi CHECK constraint tại DB — không thể thiếu.     │
+  │  platform_fee_pct + ace_margin_pct + ncc_share_pct = 100%  │
+  │  Bắt buộc bởi CHECK constraint tại DB — không thể thiếu.   │
   └──────────────────────────────────────────────────────────────┘
 
   Tham chiếu liên service:
@@ -144,13 +144,13 @@ Quyết định: **D1**, **D7**, **D8**
 
   Atomic capacity update (chặn overbooking):
   ┌─────────────────────────────────────────────────────────────┐
-  │  UPDATE inventory                                           │
-  │  SET capacity_used = capacity_used + $qty                   │
-  │  WHERE slot_id = $1                                         │
-  │    AND capacity_used + $qty <=                              │
-  │        FLOOR(capacity_total * (1 + overbook_pct / 100.0))   │
-  │  RETURNING slot_id;                                         │
-  │  -- 0 rows → hết chỗ; 1 row → thành công                    │
+  │  UPDATE inventory                                          │
+  │  SET capacity_used = capacity_used + $qty                  │
+  │  WHERE slot_id = $1                                        │
+  │    AND capacity_used + $qty <=                             │
+  │        FLOOR(capacity_total * (1 + overbook_pct / 100.0)) │
+  │  RETURNING slot_id;                                        │
+  │  -- 0 rows → hết chỗ; 1 row → thành công                 │
   └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -183,26 +183,26 @@ Publish Kafka trước, commit DB sau cũng không giải quyết được — n
   │  UPDATE services SET status = 'active'                   │
   │  INSERT INTO outbox (event_type, payload)                │
   │         VALUES ('service.approved', '{...}')             │
-  │  COMMIT  ← atomic: cả hai cùng thành công hoặc cùng fail │
+  │  COMMIT  ← atomic: cả hai cùng thành công hoặc cùng fail│
   └──────────────────────────────────────────────────────────┘
            │
            │  (DB đã commit, outbox row tồn tại)
            ▼
   ┌──────────────────────────────────────────────────────────┐
-  │  Outbox Dispatcher — 2 phương án, xem D11:               │
-  │  A) Polling Relay: goroutine SELECT ... FOR UPDATE       │
-  │     SKIP LOCKED mỗi 500ms → kafka.Publish → mark         │
-  │     'published' (chọn cho Phase 1)                       │
-  │  B) Debezium CDC: đọc WAL qua logical replication,       │
-  │     không polling, publish gần real-time (nâng cấp sau)  │
+  │  Outbox Relay (background goroutine)                     │
+  │  SELECT ... FROM outbox WHERE status='pending'           │
+  │  FOR UPDATE SKIP LOCKED  ← nhiều instance không conflict │
+  │                                                          │
+  │  kafka.Publish(event)                                    │
+  │  UPDATE outbox SET status='published'                    │
   └──────────────────────────────────────────────────────────┘
            │
-           ▼  (cả hai phương án chỉ đảm bảo at-least-once —
-               có thể publish trùng)
+           ▼  (có thể publish trùng nếu relay crash sau publish
+               nhưng trước khi mark 'published')
   ┌──────────────────────────────────────────────────────────┐
   │  Consumer phải idempotent                                │
   │  INSERT INTO processed_events (event_id)                 │
-  │  ON CONFLICT DO NOTHING  ← skip nếu đã xử lý             │
+  │  ON CONFLICT DO NOTHING  ← skip nếu đã xử lý            │
   └──────────────────────────────────────────────────────────┘
 ```
 
@@ -214,7 +214,7 @@ Quyết định: **D11**
 
 ```
  ┌────────────────────────────────────────────────────────────────────────────┐
- │                         M1 + M2 — LUỒNG NGHIỆP VỤ                          │
+ │                         M1 + M2 — LUỒNG NGHIỆP VỤ                         │
  └────────────────────────────────────────────────────────────────────────────┘
 
   ┌──────────────┐
@@ -223,54 +223,54 @@ Quyết định: **D11**
          │ 1. tự đăng ký hoặc ACE mời
          ▼
   ┌──────────────────────────────────────────────────────────────┐
-  │  M1: Onboarding — thu thập pháp nhân, MST, ngân hàng,        │
-  │  airport_scope, sync_mode, hồ sơ pháp lý                     │
+  │  M1: Onboarding — thu thập pháp nhân, MST, ngân hàng,      │
+  │  airport_scope, sync_mode, hồ sơ pháp lý                   │
   └──────────────────────┬───────────────────────────────────────┘
          │ 2. ACE Admin review KYC (thủ công)
          ▼
   ┌──────────────────────────────────────────────────────────────┐
-  │  M1: Supplier → active  │  event: supplier.onboarded         │
+  │  M1: Supplier → active  │  event: supplier.onboarded        │
   └──────────────────────┬───────────────────────────────────────┘
          │ 3. nhà cung ứng khai báo dịch vụ
          ▼
   ┌──────────────────────────────────────────────────────────────┐
-  │  M1: Service review — tên, loại, sân bay, giá, capacity      │
-  │  INSERT price_history row (append-only)                      │
-  │  Tạo inventory slots                                         │
+  │  M1: Service review — tên, loại, sân bay, giá, capacity     │
+  │  INSERT price_history row (append-only)                     │
+  │  Tạo inventory slots                                        │
   └──────────────────────┬───────────────────────────────────────┘
          │ 4. ACE Admin phê duyệt
          ▼
   ┌──────────────────────────────────────────────────────────────┐
-  │  M1: service_snapshot tạo (bất biến, v1)                     │
-  │  event: service.approved → Kafka                             │
+  │  M1: service_snapshot tạo (bất biến, v1)                   │
+  │  event: service.approved → Kafka                            │
   └──────────────────────┬───────────────────────────────────────┘
          │ snapshot_id sẵn sàng cho M2
          ▼
   ┌──────────────────────────────────────────────────────────────┐
-  │  M2: PM xây dựng gói                                         │
-  │  1. chọn snapshots đã duyệt từ M1                            │
-  │  2. đặt phạm vi: sân bay, kênh, thời gian hiệu lực           │
-  │  3. cấu hình giá + margin (sàn margin được kiểm soát)        │
-  │  4. đặt targeting rules (allow/deny, tối đa 5 cấp)           │
-  │  5. cấu hình revenue split theo từng dòng entitlement        │
-  │  6. thêm khuyến mại, preview targeting                       │
+  │  M2: PM xây dựng gói                                       │
+  │  1. chọn snapshots đã duyệt từ M1                          │
+  │  2. đặt phạm vi: sân bay, kênh, thời gian hiệu lực        │
+  │  3. cấu hình giá + margin (sàn margin được kiểm soát)      │
+  │  4. đặt targeting rules (allow/deny, tối đa 5 cấp)        │
+  │  5. cấu hình revenue split theo từng dòng entitlement      │
+  │  6. thêm khuyến mại, preview targeting                     │
   └──────────────────────┬───────────────────────────────────────┘
          │ 5. submit → ACE phê duyệt
          ▼
   ┌──────────────────────────────────────────────────────────────┐
-  │  M2: package_version tạo (bất biến)                          │
-  │  revenue_split version khoá                                  │
-  │  event: package.published → Kafka                            │
+  │  M2: package_version tạo (bất biến)                        │
+  │  revenue_split version khoá                                 │
+  │  event: package.published → Kafka                           │
   └──────────────────────┬───────────────────────────────────────┘
          │ version_id sẵn sàng cho M6 catalog
          ▼
   ┌──────────────────────────────────────────────────────────────┐
-  │  M6 Marketplace (downstream — ngoài phạm vi ADR này)         │
+  │  M6 Marketplace (downstream — ngoài phạm vi ADR này)       │
   └──────────────────────────────────────────────────────────────┘
 
 
  ┌────────────────────────────────────────────────────────────────────────────┐
- │                     CASCADE KHI UPSTREAM THAY ĐỔI                          │
+ │                     CASCADE KHI UPSTREAM THAY ĐỔI                         │
  └────────────────────────────────────────────────────────────────────────────┘
 
   event: price.changed (Kafka)
@@ -311,6 +311,10 @@ Quyết định: **D11**
 
 ```sql
 CREATE SCHEMA m1_supply;
+
+-- btree_gist bắt buộc cho EXCLUDE USING GIST kết hợp cột equality (=)
+-- với range overlap (&&) — dùng trong price_history bên dưới.
+CREATE EXTENSION IF NOT EXISTS btree_gist;
 
 -- ----------------------------------------------------------------
 -- SUPPLIERS
@@ -366,7 +370,11 @@ CREATE INDEX ON m1_supply.supplier_users (supplier_id);
 -- ----------------------------------------------------------------
 -- SERVICES (mutable)
 -- Không được tham chiếu trực tiếp bởi package/voucher.
--- Partition theo airport_code khi > 10M rows (D10).
+-- Chưa partition ở Phase 1 (D10) — PARTITION BY LIST (airport_code)
+-- yêu cầu airport_code nằm trong PK, việc này sẽ đổi shape của mọi FK
+-- trỏ vào service_id (service_snapshots, price_history, inventory) nên
+-- được để lại cho migration riêng khi thực sự vượt ngưỡng 10M rows.
+-- Index trên airport_code bên dưới là giải pháp tạm thời.
 -- ----------------------------------------------------------------
 CREATE TABLE m1_supply.services (
     service_id          UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -397,10 +405,11 @@ CREATE TABLE m1_supply.services (
     opid_ref            VARCHAR(100),
     created_at          TIMESTAMPTZ  NOT NULL DEFAULT now(),
     updated_at          TIMESTAMPTZ  NOT NULL DEFAULT now()
-) PARTITION BY LIST (airport_code);
+);
 
 CREATE INDEX ON m1_supply.services (supplier_id, status);
 CREATE INDEX ON m1_supply.services (service_type);
+CREATE INDEX ON m1_supply.services (airport_code);
 
 -- ----------------------------------------------------------------
 -- SERVICE SNAPSHOTS (immutable)
@@ -417,10 +426,19 @@ CREATE TABLE m1_supply.service_snapshots (
     UNIQUE (service_id, version)
 );
 
+-- current_snapshot_id là con trỏ cùng schema (không phải cross-service
+-- như D1 cấm) nên được FK hoá bình thường để tránh dangling reference.
+ALTER TABLE m1_supply.services
+    ADD CONSTRAINT fk_services_current_snapshot
+    FOREIGN KEY (current_snapshot_id) REFERENCES m1_supply.service_snapshots (snapshot_id);
+
 -- ----------------------------------------------------------------
 -- PRICE HISTORY (append-only)
 -- Khi giá thay đổi: INSERT row mới, KHÔNG UPDATE row cũ.
--- EXCLUDE GIST chặn hai specific price chồng lấp thời gian.
+-- EXCLUDE GIST (cần extension btree_gist ở trên) chặn hai specific
+-- price chồng lấp thời gian. Chưa partition ở Phase 1 (D10): RANGE BY
+-- created_at sẽ xung đột với EXCLUDE constraint hiện tại (không định
+-- nghĩa trên created_at) — cần thiết kế lại khi thực sự cần partition.
 -- ----------------------------------------------------------------
 CREATE TABLE m1_supply.price_history (
     price_id       UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -448,6 +466,8 @@ CREATE INDEX ON m1_supply.price_history (service_id, effective_from, effective_t
 -- INVENTORY / CAPACITY
 -- capacity_used cập nhật bằng atomic UPDATE (D9).
 -- allotment_held: phần capacity giữ riêng theo hợp đồng M7.
+-- Chưa partition ở Phase 1 (D10), cùng lý do với services — xem index
+-- trên airport_code bên dưới làm giải pháp tạm thời.
 -- ----------------------------------------------------------------
 CREATE TABLE m1_supply.inventory (
     slot_id        UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -472,6 +492,7 @@ CREATE TABLE m1_supply.inventory (
 );
 
 CREATE INDEX ON m1_supply.inventory (service_id, slot_date);
+CREATE INDEX ON m1_supply.inventory (airport_code);
 
 -- ----------------------------------------------------------------
 -- RESERVATIONS (TTL = 15 phút)
@@ -483,7 +504,7 @@ CREATE TABLE m1_supply.reservations (
     order_ref      UUID        NOT NULL,
     quantity       INT         NOT NULL DEFAULT 1,
     status         VARCHAR(20) NOT NULL DEFAULT 'held'
-                       CHECK (status IN ('held','confirmed','released')),
+                       CHECK (status IN ('held','confirmed','released','waitlisted')),
     expires_at     TIMESTAMPTZ NOT NULL DEFAULT (now() + interval '15 minutes'),
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -493,9 +514,12 @@ CREATE INDEX ON m1_supply.reservations (expires_at) WHERE status = 'held';
 
 -- ----------------------------------------------------------------
 -- AUDIT LOG (append-only, partition theo tháng)
+-- PK gồm cả created_at vì PostgreSQL yêu cầu partition key nằm trong
+-- mọi PK/UNIQUE của bảng partitioned. audit_log không có FK trỏ vào
+-- nên đây là bảng duy nhất an toàn để partition ngay từ đầu.
 -- ----------------------------------------------------------------
 CREATE TABLE m1_supply.audit_log (
-    log_id       UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    log_id       UUID        NOT NULL DEFAULT gen_random_uuid(),
     actor_id     UUID        NOT NULL,
     actor_type   VARCHAR(30) NOT NULL,
     entity_type  VARCHAR(50) NOT NULL,
@@ -504,7 +528,9 @@ CREATE TABLE m1_supply.audit_log (
     before_state JSONB,
     after_state  JSONB,
     reason       TEXT,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (log_id, created_at)
 ) PARTITION BY RANGE (created_at);
 
 -- ----------------------------------------------------------------
@@ -534,6 +560,10 @@ CREATE INDEX ON m1_supply.outbox (status, created_at) WHERE status = 'pending';
 
 ```sql
 CREATE SCHEMA m2_package;
+
+-- M1 và M2 là hai database riêng biệt (D1) nên extension phải được
+-- tạo độc lập ở đây, dùng cho EXCLUDE USING GIST trên revenue_splits.
+CREATE EXTENSION IF NOT EXISTS btree_gist;
 
 -- ----------------------------------------------------------------
 -- PACKAGES (mutable metadata)
@@ -583,6 +613,13 @@ CREATE TABLE m2_package.package_versions (
 
     UNIQUE (package_id, version)
 );
+
+-- current_version_id là con trỏ cùng schema nên được FK hoá bình
+-- thường để tránh dangling reference (khác với snapshot_id trỏ sang
+-- m1_supply, vốn cấm FK theo D1).
+ALTER TABLE m2_package.packages
+    ADD CONSTRAINT fk_packages_current_version
+    FOREIGN KEY (current_version_id) REFERENCES m2_package.package_versions (version_id);
 
 -- ----------------------------------------------------------------
 -- PACKAGE ITEMS
@@ -652,6 +689,10 @@ CREATE INDEX ON m2_package.pricing_rules (version_id, valid_from, valid_to);
 -- REVENUE SPLITS (5 thành phần)
 -- CHECK constraint: tổng 3 phần = 100% — bắt buộc tại DB.
 -- supplier_id denorm để settlement query không cần join M1.
+-- EXCLUDE GIST (cần extension btree_gist ở trên) chặn hai split chồng
+-- lấp thời gian cho cùng item_id — cùng cơ chế D6 áp dụng cho
+-- price_history, đảm bảo đúng lời hứa "1 split hiệu lực tại 1 thời
+-- điểm" của D7.
 -- ----------------------------------------------------------------
 CREATE TABLE m2_package.revenue_splits (
     split_id         UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -671,6 +712,10 @@ CREATE TABLE m2_package.revenue_splits (
 
     CONSTRAINT split_sum_100 CHECK (
         ROUND(platform_fee_pct + ace_margin_pct + ncc_share_pct, 2) = 100
+    ),
+    EXCLUDE USING GIST (
+        item_id WITH =,
+        tstzrange(effective_from, effective_to) WITH &&
     )
 );
 
@@ -733,9 +778,10 @@ CREATE TABLE m2_package.ab_tests (
 
 -- ----------------------------------------------------------------
 -- AUDIT LOG (append-only, partition theo tháng)
+-- PK gồm cả created_at, cùng lý do với m1_supply.audit_log ở trên.
 -- ----------------------------------------------------------------
 CREATE TABLE m2_package.audit_log (
-    log_id       UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    log_id       UUID        NOT NULL DEFAULT gen_random_uuid(),
     actor_id     UUID        NOT NULL,
     entity_type  VARCHAR(50) NOT NULL,
     entity_id    UUID        NOT NULL,
@@ -743,7 +789,9 @@ CREATE TABLE m2_package.audit_log (
     before_state JSONB,
     after_state  JSONB,
     reason       TEXT,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (log_id, created_at)
 ) PARTITION BY RANGE (created_at);
 ```
 
@@ -843,7 +891,7 @@ CREATE TABLE m2_package.audit_log (
 
 ### D7 — Revenue Split có versioning và CHECK constraint
 
-**Quyết định:** `revenue_splits` có `effective_from/effective_to`. Tại thời điểm xác nhận order, M6 khoá ID row đang hiệu lực vào `order_items.revenue_split_version_id`. Constraint `ROUND(platform_fee_pct + ace_margin_pct + ncc_share_pct, 2) = 100` được enforce tại DB level.
+**Quyết định:** `revenue_splits` có `effective_from/effective_to`. Tại thời điểm xác nhận order, M6 khoá ID row đang hiệu lực vào `order_items.revenue_split_version_id`. Constraint `ROUND(platform_fee_pct + ace_margin_pct + ncc_share_pct, 2) = 100` được enforce tại DB level. Tương tự D6, một `EXCLUDE USING GIST` trên `(item_id, tstzrange(effective_from, effective_to))` chặn hai split chồng lấp thời gian cho cùng `item_id` ngay tại INSERT.
 
 **Lý do:** Điều khoản tái đàm phán giữa chừng không được hồi tố thay đổi payout cho giao dịch đã hoàn thành. Constraint tổng = 100% là lưới an toàn cuối cùng — split không hợp lệ bị bắt tại INSERT, không phải lúc settlement 30 ngày sau.
 
@@ -852,7 +900,7 @@ CREATE TABLE m2_package.audit_log (
 | Lợi ích | Chi phí |
 |---------|---------|
 | Settlement tại T+n dùng đúng split thoả thuận tại T=0 | `ROUND` trong constraint phải khớp với `shopspring/decimal` trong Go — divergence gây lỗi 500 khi INSERT hợp lệ |
-| DB constraint bắt lỗi sớm nhất có thể | Split `effective_from` phải phối hợp với contract activation trong M7 |
+| DB constraint bắt lỗi sớm nhất có thể; `EXCLUDE` chặn overlap split cùng lúc INSERT, không cần lock ứng dụng | Split `effective_from` phải phối hợp với contract activation trong M7; `EXCLUDE` cần extension `btree_gist` được tạo trong database `m2_package` |
 
 ---
 
@@ -888,75 +936,33 @@ CREATE TABLE m2_package.audit_log (
 
 ### D10 — Partitioning theo `airport_code` (LIST) và `created_at` (RANGE)
 
-**Quyết định:** `services` và `inventory` dùng `PARTITION BY LIST (airport_code)` khi > 10M rows. `audit_log` và `price_history` dùng `PARTITION BY RANGE (created_at)` theo tháng.
+**Quyết định:** Chỉ `audit_log` (cả hai schema) dùng `PARTITION BY RANGE (created_at)` theo tháng ngay từ đầu — không có bảng nào FK vào `audit_log` nên PK có thể mở rộng thành `(log_id, created_at)` để thoả yêu cầu PostgreSQL (partition key phải nằm trong mọi PK/UNIQUE). `services`, `inventory` và `price_history` **chưa** partition ở Phase 1: `PARTITION BY LIST (airport_code)` sẽ buộc PK của `services`/`inventory` phải mở rộng thành `(airport_code, ...)`, kéo theo mọi FK trỏ vào `service_id` (từ `service_snapshots`, `price_history`, `inventory`, `reservations`) phải đổi thành composite key; `price_history` còn phức tạp hơn vì `EXCLUDE USING GIST` hiện định nghĩa trên `(service_id, price_type, tstzrange)`, không phải trên `created_at`, nên partition theo `created_at` sẽ không tương thích với constraint đó nếu không thiết kế lại. Việc partition ba bảng này được để lại cho một migration riêng khi thực sự vượt ngưỡng 10M rows; trong lúc chờ, `CREATE INDEX ... (airport_code)` trên `services` và `inventory` đóng vai trò giải pháp tạm để giữ mục tiêu "chỉ scan 1 sân bay".
 
-**Lý do:** Phần lớn query vận hành đều có filter `WHERE airport_code = X` — partition loại bỏ toàn bộ airport khác. Range partition theo tháng cho phép DROP partition cũ trong milliseconds thay vì DELETE hàng triệu rows.
+**Lý do:** Phần lớn query vận hành đều có filter `WHERE airport_code = X` — partition loại bỏ toàn bộ airport khác. Range partition theo tháng cho phép DROP partition cũ trong milliseconds thay vì DELETE hàng triệu rows. Nhưng partition ngay từ Phase 1 khi row count còn nhỏ (<1M) tạo rủi ro DDL không hợp lệ hoặc phải thiết kế lại constraint sớm — trong khi lợi ích (partition pruning) chưa cần thiết ở quy mô này.
 
 **Đánh đổi:**
 
 | Lợi ích | Chi phí |
 |---------|---------|
-| Query theo airport chỉ scan đúng 1 partition | Cần script tạo partition tự động khi ACE mở sân bay mới — quên tạo → INSERT fail |
-| DROP partition cũ nhanh hơn DELETE | Phase 1 chưa cần partition (< 1M rows); kích hoạt khi thực sự vượt ngưỡng 10M |
+| `audit_log` DROP partition cũ nhanh hơn DELETE ngay từ Phase 1 | `services`/`inventory`/`price_history` chưa có partition pruning ở Phase 1 — bù bằng index thường trên `airport_code`, chấp nhận được vì row count còn nhỏ (<1M) |
+| Không phải thiết kế lại composite PK/FK hay `EXCLUDE` constraint ngay bây giờ | Cần script tạo partition + migration composite key/FK cho `services`/`inventory`/`price_history` khi vượt ngưỡng 10M rows — phải lên kế hoạch trước, không phải việc bật công tắc đơn giản |
 
 ---
 
 ### D11 — Transactional Outbox Pattern cho Kafka publishing
 
-**Quyết định:** Mỗi service (M1, M2) có bảng `outbox` trong schema của nó. Khi một use case cần phát sinh Kafka event, thay vì gọi Kafka trực tiếp, service INSERT một row vào `outbox` trong cùng DB transaction với entity change — atomic với entity change, không có khoảng hở giữa DB commit và event publish. Có hai phương án cho phần "đọc outbox và đẩy lên Kafka" (outbox dispatcher); ACE chọn **Phương án A (Polling Relay)** cho Phase 1 và cân nhắc **Phương án B (Debezium CDC)** khi quy mô event tăng.
+**Quyết định:** Mỗi service (M1, M2) có bảng `outbox` trong schema của nó. Khi một use case cần phát sinh Kafka event, thay vì gọi Kafka trực tiếp, service INSERT một row vào `outbox` trong cùng DB transaction với entity change. Một background goroutine (Outbox Relay) poll bảng `outbox` mỗi 500ms, publish lên Kafka, rồi mark `status = 'published'`. Relay dùng `SELECT ... FOR UPDATE SKIP LOCKED` để nhiều instance chạy song song không conflict. Consumer phía nhận phải idempotent — dùng bảng `processed_events` với `ON CONFLICT DO NOTHING` để bỏ qua duplicate.
 
-**Phương án A — Polling Relay (background goroutine tự viết):**
+**Lý do:** Không có distributed transaction giữa Aurora PostgreSQL và Amazon MSK. Cách publish Kafka sau khi commit DB tạo khoảng thời gian crash có thể mất message vĩnh viễn — M2 không nhận được `service.approved` nên không thể kéo snapshot mới, cascade không xảy ra, hệ thống silent inconsistent mà không có cảnh báo nào.
 
-```
-  Một background goroutine (Outbox Relay) poll bảng outbox mỗi 500ms:
-  SELECT ... FROM outbox WHERE status='pending'
-  FOR UPDATE SKIP LOCKED     ← nhiều instance không conflict
-  kafka.Publish(event)
-  UPDATE outbox SET status='published'
-```
-
-Relay chạy trong cùng codebase Go của service, dùng `status` (`pending`/`published`/`failed`) và `retry_count` để theo dõi tiến độ publish.
-
-**Phương án B — Debezium CDC (logical replication, không polling):**
-
-```
-  Debezium Postgres Connector (chạy trong Kafka Connect)
-  đọc logical replication slot (WAL) của Aurora — KHÔNG query bảng outbox
-  Outbox Event Router SMT:
-    - route theo aggregate_type → đúng Kafka topic
-    - payload JSONB → Kafka message value
-  Publish lên Kafka ngay khi transaction commit xuất hiện trong WAL
-```
-
-Với phương án này, bảng `outbox` không cần `status`/`retry_count` vì không relay nào cập nhật trạng thái — WAL đã capture sự kiện tại thời điểm commit bất kể row sau đó còn hay đã bị dọn.
-
-Ở cả hai phương án, consumer phía nhận vẫn phải idempotent — dùng bảng `processed_events` với `ON CONFLICT DO NOTHING` để bỏ qua duplicate, vì cả polling relay lẫn Debezium đều chỉ đảm bảo at-least-once, không phải exactly-once.
-
-**Lý do:** Không có distributed transaction giữa Aurora PostgreSQL và Amazon MSK. Cách publish Kafka sau khi commit DB tạo khoảng thời gian crash có thể mất message vĩnh viễn — M2 không nhận được `service.approved` nên không thể kéo snapshot mới, cascade không xảy ra, hệ thống silent inconsistent mà không có cảnh báo nào. Cả hai phương án đều đóng khoảng hở này bằng cách tách "ghi event" (trong transaction) khỏi "gửi event" (ngoài transaction); khác biệt chỉ ở cách đọc outbox.
-
-**So sánh Polling Relay vs Debezium CDC:**
-
-| Tiêu chí | Phương án A — Polling Relay | Phương án B — Debezium CDC |
-|---|---|---|
-| Latency | ~500ms (chu kỳ poll) dù hệ thống rảnh | Gần real-time (sub-100ms) — đọc WAL ngay khi commit |
-| Tải lên DB | SELECT lặp lại mỗi 500ms + `FOR UPDATE SKIP LOCKED` trên mọi instance | Không query bảng — tail WAL stream Postgres vốn đã ghi cho replication |
-| Schema `outbox` | Cần `status`, `retry_count` để theo dõi state machine pending→published→failed | Không cần `status`/`retry_count` — schema gọn hơn |
-| Hạ tầng bổ sung | Không — chạy trong process Go hiện có | Cần Kafka Connect cluster + Debezium connector (thành phần vận hành mới) |
-| Yêu cầu DB | Không đổi | Phải bật `wal_level=logical` trên Aurora — tăng WAL retention, ảnh hưởng storage/failover |
-| Rủi ro vận hành | Relay crash → outbox tích luỹ, dễ phát hiện qua `retry_count`/queue depth | Connector down lâu → replication slot bị giữ, WAL phình to không giới hạn cho tới khi connector chạy lại hoặc slot bị drop |
-| Độ phức tạp triển khai | Thấp — team đã quen Go, không thêm dependency hạ tầng | Cao hơn — cần kỹ năng vận hành Kafka Connect/Debezium, cấu hình Outbox Event Router SMT |
-| Phù hợp | Phase 1 (một vài sân bay, event throughput thấp–vừa) | Khi throughput lớn hoặc latency 500ms không chấp nhận được (Phase 3–4) |
-
-**Đánh đổi (Phương án A — lựa chọn Phase 1):**
+**Đánh đổi:**
 
 | Lợi ích | Chi phí |
 |---------|---------|
 | Đảm bảo at-least-once delivery — event không bao giờ mất dù crash tại bất kỳ điểm nào | Relay tạo thêm ~500ms latency so với publish trực tiếp; chấp nhận được cho ACE Phase 1 |
 | Entity state và event luôn nhất quán — không có trạng thái "DB đã thay đổi nhưng event chưa gửi" | Consumer bắt buộc phải idempotent — thêm bảng `processed_events` và kiểm tra trước khi xử lý |
-| Không cần distributed transaction, saga orchestrator, hay hạ tầng Kafka Connect/Debezium phức tạp | `outbox` tăng trưởng theo thời gian; cần job dọn row `published` cũ hơn 7 ngày |
+| Không cần distributed transaction hay saga orchestrator phức tạp | `outbox` tăng trưởng theo thời gian; cần job dọn row `published` cũ hơn 7 ngày |
 | Nhiều relay instance chạy song song an toàn nhờ `SKIP LOCKED` | Nếu Kafka down kéo dài, `outbox` tích luỹ; cần alert khi `retry_count > 3` |
-
-**Đường nâng cấp:** Nếu Phase 3–4 cần latency thấp hơn 500ms hoặc polling tạo tải DB đáng kể, chuyển sang Debezium CDC là migration tương thích ngược — bảng `outbox` giữ nguyên PK/columns cốt lõi (`aggregate_type`, `aggregate_id`, `event_type`, `payload`), chỉ cần bổ sung `wal_level=logical`, triển khai Kafka Connect, và có thể loại bỏ `status`/`retry_count` sau khi tắt relay cũ.
 
 ---
 
