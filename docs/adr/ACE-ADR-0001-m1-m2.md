@@ -13,7 +13,7 @@ M1 và M2 tạo thành lớp cung ứng và lớp sản phẩm của nền tản
 
 1. **Tính bất biến** — giá, định nghĩa dịch vụ và cấu hình gói được thoả thuận tại thời điểm giao dịch không bao giờ được thay đổi hồi tố, dù nhà cung ứng có chỉnh sửa metadata hay giá thay đổi về sau.
 2. **Thương mại hoá có kiểm soát** — không có dịch vụ hay gói nào đến tay người mua mà không qua cổng phê duyệt thuộc ACE; nhà cung ứng và Product Manager không thể tự publish thẳng ra marketplace.
-3. **Tính toàn vẹn tài chính** — revenue split giữa ACE và từng nhà cung ứng phải được khoá tại thời điểm bán và có thể truy vết về đúng điều khoản thương mại hiệu lực tại thời điểm đó; tham chiếu liên service dùng UUID thay vì FK để M1 và M2 deploy độc lập.
+3. **Tính toàn vẹn tài chính** — revenue split giữa ACE và từng nhà cung ứng phải được khoá tại thời điểm bán và có thể truy vết về đúng điều khoản thương mại hiệu lực tại thời điểm đó.
 4. **Hiệu năng ở quy mô lớn** — từ Phase 1 (một vài sân bay) đến Phase 4 (đa quốc gia, > 10M rows) mà không cần viết lại schema hay query.
 5. **Tính tin cậy của message publishing** — sự kiện Kafka (`price.changed`, `package.published`) phải được đảm bảo gửi đúng một lần; crash giữa chừng không được làm mất event hoặc để hệ thống rơi vào trạng thái không nhất quán giữa DB và message broker.
 
@@ -100,7 +100,7 @@ Quyết định: **D4**, **D5**
 
 ### Thách thức 3 — Tính toàn vẹn tài chính và tham chiếu liên service
 
-**Vấn đề:** Một gói bundling entitlement từ nhiều nhà cung ứng — mỗi entitlement có platform fee, ACE margin và VAT riêng. Điều khoản thương mại thay đổi giữa chừng. Nếu revenue split không được khoá tại thời điểm giao dịch, settlement sẽ bị lệch. Đồng thời, nếu M2 dùng FK xuyên schema để tham chiếu M1, hai service bị couple về migration — không thể deploy độc lập.
+**Vấn đề:** Một gói bundling entitlement từ nhiều nhà cung ứng — mỗi entitlement có platform fee, ACE margin và VAT riêng. Điều khoản thương mại thay đổi giữa chừng. Nếu revenue split không được khoá tại thời điểm giao dịch, settlement sẽ bị lệch.
 
 **Giải pháp — Revenue split versioned + UUID cross-reference:**
 
@@ -365,13 +365,12 @@ CREATE INDEX ON m1_supply.suppliers USING GIN (airport_scope);
 -- SERVICES (mutable)
 -- Không được tham chiếu trực tiếp bởi package/voucher.
 -- KHÔNG partition (D10) — PARTITION BY LIST (airport_code) đòi hỏi
--- airport_code nằm trong PK, kéo theo mọi FK trỏ vào service_id
--- (service_snapshots, price_history, inventory) phải đổi shape.
--- Index trên airport_code bên dưới là thiết kế Phase 1.
+-- airport_code nằm trong PK của chính bảng này. Index trên
+-- airport_code bên dưới là thiết kế Phase 1.
 -- ----------------------------------------------------------------
 CREATE TABLE m1_supply.services (
     service_id          UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
-    supplier_id         UUID         NOT NULL REFERENCES m1_supply.suppliers,
+    supplier_id         UUID         NOT NULL,
     service_type        VARCHAR(30)  NOT NULL
                             CHECK (service_type IN (
                                 'lounge','fast_track','fnb','transport','baggage'
@@ -410,7 +409,7 @@ CREATE INDEX ON m1_supply.services (airport_code);
 -- ----------------------------------------------------------------
 CREATE TABLE m1_supply.service_snapshots (
     snapshot_id    UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    service_id     UUID        NOT NULL REFERENCES m1_supply.services,
+    service_id     UUID        NOT NULL,
     version        INT         NOT NULL,
     snapshot_data  JSONB       NOT NULL,
     published_by   UUID        NOT NULL,
@@ -419,11 +418,8 @@ CREATE TABLE m1_supply.service_snapshots (
     UNIQUE (service_id, version)
 );
 
--- current_snapshot_id là con trỏ cùng schema (không phải cross-service
--- như D1 cấm) nên được FK hoá bình thường để tránh dangling reference.
-ALTER TABLE m1_supply.services
-    ADD CONSTRAINT fk_services_current_snapshot
-    FOREIGN KEY (current_snapshot_id) REFERENCES m1_supply.service_snapshots (snapshot_id);
+-- current_snapshot_id: con trỏ cùng schema
+-- tồn tại ở application layer trước khi cập nhật.
 
 -- ----------------------------------------------------------------
 -- PRICE HISTORY (append-only)
@@ -435,7 +431,7 @@ ALTER TABLE m1_supply.services
 -- ----------------------------------------------------------------
 CREATE TABLE m1_supply.price_history (
     price_id       UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
-    service_id     UUID          NOT NULL REFERENCES m1_supply.services,
+    service_id     UUID          NOT NULL,
     price_type     VARCHAR(20)   NOT NULL CHECK (price_type IN ('default','specific')),
     price_source   VARCHAR(20)   NOT NULL DEFAULT 'base'
                        CHECK (price_source IN ('base','bundle_override','volume_tier')),
@@ -464,7 +460,7 @@ CREATE INDEX ON m1_supply.price_history (service_id, effective_from, effective_t
 -- ----------------------------------------------------------------
 CREATE TABLE m1_supply.inventory (
     slot_id        UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
-    service_id     UUID          NOT NULL REFERENCES m1_supply.services,
+    service_id     UUID          NOT NULL,
     airport_code   VARCHAR(10)   NOT NULL,
     slot_date      DATE          NOT NULL,
     slot_start     TIMETZ,
@@ -493,7 +489,7 @@ CREATE INDEX ON m1_supply.inventory (airport_code);
 -- ----------------------------------------------------------------
 CREATE TABLE m1_supply.reservations (
     reservation_id UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    slot_id        UUID        NOT NULL REFERENCES m1_supply.inventory,
+    slot_id        UUID        NOT NULL,
     order_ref      UUID        NOT NULL,
     quantity       INT         NOT NULL DEFAULT 1,
     status         VARCHAR(20) NOT NULL DEFAULT 'held'
@@ -597,7 +593,7 @@ CREATE INDEX ON m2_package.packages (status, airport_code);
 -- ----------------------------------------------------------------
 CREATE TABLE m2_package.package_versions (
     version_id      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    package_id      UUID        NOT NULL REFERENCES m2_package.packages,
+    package_id      UUID        NOT NULL,
     version         INT         NOT NULL,
     config_snapshot JSONB       NOT NULL,
     published_by    UUID        NOT NULL,
@@ -607,21 +603,17 @@ CREATE TABLE m2_package.package_versions (
     UNIQUE (package_id, version)
 );
 
--- current_version_id là con trỏ cùng schema nên được FK hoá bình
--- thường để tránh dangling reference (khác với snapshot_id trỏ sang
--- m1_supply, vốn cấm FK theo D1).
-ALTER TABLE m2_package.packages
-    ADD CONSTRAINT fk_packages_current_version
-    FOREIGN KEY (current_version_id) REFERENCES m2_package.package_versions (version_id);
+-- current_version_id: con trỏ cùng schema
+-- tồn tại ở application layer trước khi cập nhật.
 
 -- ----------------------------------------------------------------
 -- PACKAGE ITEMS
--- snapshot_id → m1_supply.service_snapshots (UUID, không FK).
+-- snapshot_id → m1_supply.service_snapshots (UUID).
 -- Đây là điểm kết nối kỹ thuật quan trọng giữa M1 và M2.
 -- ----------------------------------------------------------------
 CREATE TABLE m2_package.package_items (
     item_id       UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    version_id    UUID        NOT NULL REFERENCES m2_package.package_versions,
+    version_id    UUID        NOT NULL,
     snapshot_id   UUID        NOT NULL,
     service_type  VARCHAR(30) NOT NULL,
     quantity      INT         NOT NULL DEFAULT 1,
@@ -639,7 +631,7 @@ CREATE INDEX ON m2_package.package_items (snapshot_id);
 -- ----------------------------------------------------------------
 CREATE TABLE m2_package.prices (
     price_id               UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
-    version_id             UUID          NOT NULL REFERENCES m2_package.package_versions,
+    version_id             UUID          NOT NULL,
     base_cost              NUMERIC(15,2) NOT NULL,
     margin_pct             NUMERIC(5,2)  NOT NULL,
     selling_price          NUMERIC(15,2) NOT NULL,
@@ -651,12 +643,12 @@ CREATE TABLE m2_package.prices (
 
 -- ----------------------------------------------------------------
 -- PRICING RULES
--- commercial_term_id → m7_partner.commercial_terms (UUID, không FK).
+-- commercial_term_id → m7_partner.commercial_terms (UUID).
 -- Phase 1: không cộng dồn — chỉ rule priority cao nhất được áp dụng.
 -- ----------------------------------------------------------------
 CREATE TABLE m2_package.pricing_rules (
     rule_id            UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
-    version_id         UUID          NOT NULL REFERENCES m2_package.package_versions,
+    version_id         UUID          NOT NULL,
     rule_type          VARCHAR(30)   NOT NULL
                            CHECK (rule_type IN (
                                'time_discount','early_bird','last_minute',
@@ -689,8 +681,8 @@ CREATE INDEX ON m2_package.pricing_rules (version_id, valid_from, valid_to);
 -- ----------------------------------------------------------------
 CREATE TABLE m2_package.revenue_splits (
     split_id         UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
-    item_id          UUID         NOT NULL REFERENCES m2_package.package_items,
-    version_id       UUID         NOT NULL REFERENCES m2_package.package_versions,
+    item_id          UUID         NOT NULL,
+    version_id       UUID         NOT NULL,
     snapshot_id      UUID         NOT NULL,
     supplier_id      UUID         NOT NULL,
     platform_fee_pct NUMERIC(5,2) NOT NULL CHECK (platform_fee_pct BETWEEN 5 AND 40),
@@ -721,7 +713,7 @@ CREATE INDEX ON m2_package.revenue_splits (item_id, effective_from);
 -- ----------------------------------------------------------------
 CREATE TABLE m2_package.targeting_rules (
     targeting_id UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    version_id   UUID        NOT NULL REFERENCES m2_package.package_versions,
+    version_id   UUID        NOT NULL,
     rule_type    VARCHAR(10) NOT NULL CHECK (rule_type IN ('allow','deny')),
     priority     INT         NOT NULL DEFAULT 0,
     conditions   JSONB       NOT NULL,
@@ -736,7 +728,7 @@ CREATE INDEX ON m2_package.targeting_rules (version_id);
 -- ----------------------------------------------------------------
 CREATE TABLE m2_package.promotions (
     promo_id       UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
-    package_id     UUID          NOT NULL REFERENCES m2_package.packages,
+    package_id     UUID          NOT NULL,
     name           VARCHAR(255)  NOT NULL,
     discount_type  VARCHAR(10)   NOT NULL CHECK (discount_type IN ('percent','fixed')),
     discount_value NUMERIC(15,2) NOT NULL,
@@ -758,9 +750,9 @@ CREATE INDEX ON m2_package.promotions (package_id, valid_from, valid_to);
 -- ----------------------------------------------------------------
 CREATE TABLE m2_package.ab_tests (
     test_id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    package_id        UUID        NOT NULL REFERENCES m2_package.packages,
-    variant_a_version UUID        NOT NULL REFERENCES m2_package.package_versions,
-    variant_b_version UUID        NOT NULL REFERENCES m2_package.package_versions,
+    package_id        UUID        NOT NULL,
+    variant_a_version UUID        NOT NULL,
+    variant_b_version UUID        NOT NULL,
     traffic_split_pct INT         NOT NULL DEFAULT 50
                           CHECK (traffic_split_pct BETWEEN 1 AND 99),
     status            VARCHAR(20) NOT NULL DEFAULT 'running'
@@ -804,6 +796,9 @@ CREATE INDEX ON m2_package.audit_log (created_at);
 |---------|---------|
 | M1 và M2 deploy độc lập — migration schema một bên không ảnh hưởng bên kia | Query tổng hợp liên service phải qua API composition hoặc read model riêng |
 | Mỗi service chọn index, partition strategy phù hợp với load của nó | Denormalization bắt buộc — `supplier_id` phải lưu trong `revenue_splits` thay vì join M1 |
+
+> Nguyên tắc "UUID, không FK" ở đây áp dụng cho tham chiếu **xuyên schema**.
+> này cho cả tham chiếu **trong cùng schema** (M1 nội bộ, M2 nội bộ).
 
 ---
 
@@ -966,14 +961,14 @@ tại thời điểm `order.confirmed` (D3, D7).
 
 **Quyết định:** Không bảng nào trong M1/M2 (`services`, `inventory`, `price_history`, `audit_log` ở cả hai schema) dùng table partitioning ở Phase 1. Thay vào đó: B-tree index trên `airport_code` cho `services`/`inventory`; `EXCLUDE USING GIST` sẵn có (đã định nghĩa trên `service_id, price_type, tstzrange`) phục vụ luôn mục đích lọc cho `price_history`; B-tree index trên `created_at` cho `audit_log`, dùng cho cả truy vấn theo khoảng thời gian lẫn cleanup job (`DELETE ... WHERE created_at < ...` theo batch, thay vì `DROP PARTITION`).
 
-**Lý do:** Partition (LIST theo `airport_code` hoặc RANGE theo `created_at`) đòi hỏi partition key nằm trong mọi PK/UNIQUE constraint của bảng. Với `services`/`inventory`, điều này kéo theo composite PK/FK lan sang `service_snapshots`, `price_history`, `reservations`; với `price_history`, còn xung đột trực tiếp với `EXCLUDE USING GIST` hiện có (định nghĩa trên `service_id`, không phải `created_at`). Ngay cả `audit_log` — bảng duy nhất không vướng chi phí cấu trúc đó, vì không bảng nào FK vào nó — cũng không cần partition ở quy mô Phase 1: index B-tree trên `created_at` đã đủ nhanh cho cả hai nhu cầu (query theo khoảng thời gian, cleanup định kỳ), trong khi partition thêm một lớp vận hành (tạo partition mới định kỳ, đảm bảo default partition, giám sát riêng) mà lợi ích chưa tương xứng ở row count hiện tại.
+**Lý do:** Partition (LIST theo `airport_code` hoặc RANGE theo `created_at`) đòi hỏi partition key nằm trong mọi PK/UNIQUE constraint của chính bảng đó. Với `price_history`, điều này xung đột trực tiếp với `EXCLUDE USING GIST` hiện có (định nghĩa trên `service_id`, không phải `created_at`). Với `services`/`inventory`/`audit_log`, nên partition PK của riêng bảng đó không kéo theo cascade sang bảng khác; lý do duy nhất còn lại để chưa partition là quy mô Phase 1 chưa đủ lớn để lợi ích partition pruning vượt qua chi phí vận hành thêm (tạo partition mới định kỳ, đảm bảo default partition, giám sát riêng).
 
 **Đánh đổi:**
 
 | Lợi ích | Chi phí |
 |---------|---------|
-| Toàn bộ schema giữ hình dạng đơn giản nhất — không bảng nào cần composite PK/FK hay thiết kế lại `EXCLUDE` constraint | Không có partition pruning ở bất kỳ đâu — mọi query lớn phụ thuộc hoàn toàn vào chất lượng index |
-| Không cần vận hành thêm: không job tạo partition theo tháng, không default partition cần giám sát | `audit_log` cleanup dùng DELETE theo batch thay vì DROP partition — chậm hơn, để lại dead tuple, cần job định kỳ + theo dõi table bloat/VACUUM |
+| Không cần vận hành thêm: không job tạo partition theo tháng, không default partition cần giám sát | Không có partition pruning ở bất kỳ đâu — mọi query lớn phụ thuộc hoàn toàn vào chất lượng index |
+| `price_history` không cần thiết kế lại `EXCLUDE` constraint | `audit_log` cleanup dùng DELETE theo batch thay vì DROP partition — chậm hơn, để lại dead tuple, cần job định kỳ + theo dõi table bloat/VACUUM |
 
 ---
 
@@ -993,16 +988,6 @@ tại thời điểm `order.confirmed` (D3, D7).
 | Không có race condition nhiều instance polling cùng lúc — Debezium connector đọc WAL tuần tự theo LSN, không cần `SKIP LOCKED` | Thay đổi schema trên bảng `outbox` (hoặc publication liên quan) cần cấu hình lại Debezium connector — thêm một điểm phối hợp khi migrate |
 
 ---
-
-## Hệ quả
-
-| Thách thức | Đảm bảo | Lưu ý |
-|------------|---------|-------|
-| **Tính bất biến** | Snapshot chain (service_snapshot → package_version → order_item) đảm bảo chỉnh sửa upstream không có tác động hồi tố. Price history append-only với GIST exclusion đảm bảo giá tại bất kỳ thời điểm nào đều truy vết được. | Snapshot và price_history tăng trưởng không giới hạn. Cần archival job: snapshot archive sau khi toàn bộ voucher tham chiếu đã expired/settled; price_history cũ rotate sang S3 sau retention window. |
-| **Thương mại hoá có kiểm soát** | Không có service hay package nào vào pipeline thương mại mà không qua ACE approval. Cascade Kafka tự paused package khi service thành phần có sự cố trong < 500ms. | ACE Admin review queue là rủi ro điểm nghẽn. Pre-validation checks (completeness, price sanity) nên tự động hoá trong submit workflow. |
-| **Tính toàn vẹn tài chính** | Revenue split CHECK constraint tổng = 100% tại DB. Split version khoá tại checkout. Schema riêng biệt giữ M1/M2 deploy độc lập. | Split `effective_from` phải phối hợp với contract activation trong M7. Dangling UUID references (M2 trỏ snapshot đã archive trong M1) cần audit job định kỳ kiểm tra. |
-| **Hiệu năng** | Atomic inventory UPDATE chặn race condition overbooking. Index thường trên `airport_code` (`services`/`inventory`/`price_history`) và trên `created_at` (`audit_log`) giữ query nhanh ở quy mô Phase 1 mà không cần partition. | Index nên monitor bằng `pg_stat_user_indexes` sau khi có traffic thực — không thêm index speculative. `audit_log` cleanup (DELETE theo batch) cần job định kỳ + theo dõi table bloat/VACUUM, vì không có DROP partition. |
-| **Tính tin cậy message** | Outbox Pattern qua Debezium CDC đảm bảo at-least-once delivery — không có event nào bị mất dù crash tại bất kỳ điểm nào trong luồng xử lý. | Consumer phải idempotent. Cần alert khi Debezium connector down hoặc replication slot lag vượt ngưỡng (WAL tích tụ). Job dọn row `outbox` cũ hơn 7 ngày theo `created_at` để tránh bảng phình to. |
 
 **Hệ quả bổ sung:**
 
