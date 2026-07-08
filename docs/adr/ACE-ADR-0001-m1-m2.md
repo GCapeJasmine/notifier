@@ -9,7 +9,7 @@ M1 và M2 tạo thành lớp cung ứng và lớp sản phẩm của nền tản
 - **M1:** Dịch vụ nào đang tồn tại, ai cung cấp, giá bao nhiêu, còn bao nhiêu năng lực phục vụ?
 - **M2:** Các dịch vụ đó được đóng gói thành sản phẩm bán được như thế nào, định giá ra sao, và hiển thị cho đúng người mua nào?
 
-Năm thách thức cốt lõi chi phối mọi quyết định kiến trúc và thiết kế database trong tài liệu này:
+5 thách thức cốt lõi chi phối mọi quyết định kiến trúc và thiết kế database trong tài liệu này:
 
 1. **Tính bất biến** — giá, định nghĩa dịch vụ và cấu hình gói được thoả thuận tại thời điểm giao dịch không bao giờ được thay đổi hồi tố, dù nhà cung ứng có chỉnh sửa metadata hay giá thay đổi về sau.
 2. **Thương mại hoá có kiểm soát** — không có dịch vụ hay gói nào đến tay người mua mà không qua cổng phê duyệt thuộc ACE; nhà cung ứng và Product Manager không thể tự publish thẳng ra marketplace.
