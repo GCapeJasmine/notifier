@@ -86,7 +86,7 @@ Quyết định: **D2**, **D3**, **D6**
               approved ──▶ active ──▶ paused ──▶ deprecated ──▶ archived
 
   M2 — Vòng đời gói dịch vụ
-  draft ──▶ pending_approval ──▶ active ──▶ paused
+  draft ──▶ pending_review ──▶ active ──▶ paused
                                       └──▶ replaced ──▶ archived
 
   Cascade khi upstream thay đổi (qua Kafka):
@@ -587,7 +587,7 @@ CREATE TABLE m2_package.packages (
     valid_to           TIMESTAMPTZ,
     status             VARCHAR(30)  NOT NULL DEFAULT 'draft'
                            CHECK (status IN (
-                               'draft','pending_approval','active',
+                               'draft','pending_review','active',
                                'paused','replaced','archived'
                            )),
     current_version_id UUID,
@@ -887,7 +887,7 @@ Finance Manager cấu hình lại revenue_split cho version mới nếu cần (D
 package_items của version mới là row mới, không kế thừa revenue_splits cũ)
      │
      ▼
-Submit → status = pending_approval ("Review" theo M2-US-04 AC1/AC2)
+Submit → status = pending_review ("Review" theo M2-US-04 AC1/AC2)
      │
      ▼
 ACE Admin review & approve (cổng phê duyệt D4 — kiểm tra price sanity,

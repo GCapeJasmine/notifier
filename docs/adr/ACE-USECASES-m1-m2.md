@@ -328,7 +328,7 @@ test engine).
      │  định để test rule                 │                              │
      ├────────────────────────────────────▶                              │
      │ 4. Submit review                   │                              │
-     │  status → pending_approval         │                              │
+     │  status → pending_review           │                              │
      ├────────────────────────────────────┼─────────────────────────────▶│
      │                                    │              5. Review, kiểm  │
      │                                    │              tra completeness,│
@@ -344,7 +344,7 @@ test engine).
 **Sub-flow — M2-US-04: lifecycle & versioning**
 
 ```
-  draft ──▶ pending_approval ──▶ active ──▶ paused
+  draft ──▶ pending_review ──▶ active ──▶ paused
                                     │
                                     └──▶ replaced ──▶ archived
 
@@ -496,7 +496,7 @@ Finance Manager cấu hình lại revenue split cho version mới (M2-US-06 —
 package_items của version mới, không kế thừa revenue_splits cũ)
      │
      ▼
-Submit → status = pending_approval ("Review" — M2-US-04 AC1/AC2)
+Submit → status = pending_review ("Review" — M2-US-04 AC1/AC2)
      │
      ▼
 ACE Admin review & approve
