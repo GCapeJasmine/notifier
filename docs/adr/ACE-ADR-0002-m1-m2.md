@@ -15,7 +15,7 @@ Năm thách thức cốt lõi chi phối mọi quyết định kiến trúc và 
 2. **Thương mại hoá có kiểm soát** — không có dịch vụ hay gói nào đến tay người mua mà không qua cổng phê duyệt thuộc ACE; nhà cung ứng và Product Manager không thể tự publish thẳng ra marketplace.
 3. **Tính toàn vẹn tài chính** — revenue split giữa ACE và từng nhà cung ứng phải được khoá tại thời điểm bán và có thể truy vết về đúng điều khoản thương mại hiệu lực tại thời điểm đó; tham chiếu liên service dùng UUID thay vì FK để M1 và M2 deploy độc lập.
 4. **Hiệu năng ở quy mô lớn** — từ Phase 1 (một vài sân bay) đến Phase 4 (đa quốc gia, > 10M rows) mà không cần viết lại schema hay query.
-5. **Tính tin cậy của message publishing** — sự kiện Kafka (`service.approved`, `price.changed`, `package.published`) phải được đảm bảo gửi đúng một lần; crash giữa chừng không được làm mất event hoặc để hệ thống rơi vào trạng thái không nhất quán giữa DB và message broker.
+5. **Tính tin cậy của message publishing** — sự kiện Kafka (`price.changed`, `package.published`) phải được đảm bảo gửi đúng một lần; crash giữa chừng không được làm mất event hoặc để hệ thống rơi vào trạng thái không nhất quán giữa DB và message broker.
 
 ---
 
@@ -160,16 +160,16 @@ Quyết định: **D9**, **D10**
 
 ### Thách thức 5 — Tính tin cậy của message publishing
 
-**Vấn đề:** M1 và M2 phát sinh Kafka events tại các điểm chuyển trạng thái quan trọng (`service.approved`, `price.changed`, `package.published`). Cách triển khai naive — commit DB trước, publish Kafka sau — tạo khoảng thời gian nguy hiểm:
+**Vấn đề:** M1 và M2 phát sinh Kafka events tại các điểm chuyển trạng thái quan trọng (`price.changed`, `package.published`, và cascade `service.paused`/`service.deprecated`). Cách triển khai naive — commit DB trước, publish Kafka sau — tạo khoảng thời gian nguy hiểm:
 
 ```
-  UPDATE services SET status='active'
+  UPDATE services SET status='paused'
   tx.Commit()                        ← DB đã ghi, không rollback được
-  kafka.Publish("service.approved")  ← crash tại đây → message mất vĩnh viễn
+  kafka.Publish("service.paused")    ← crash tại đây → message mất vĩnh viễn
 
-  Hệ quả: M2 không biết service đã approved
-          → package không thể kéo snapshot mới
-          → PM tưởng hệ thống bị treo, tự thao tác lại → duplicate state
+  Hệ quả: M2 không biết service đã paused
+          → package chứa service này vẫn hiển thị active, tiếp tục bán
+          → buyer mua phải entitlement không còn khả dụng
 ```
 
 Publish Kafka trước, commit DB sau cũng không giải quyết được — nếu DB commit fail, event đã đến consumer và gây side-effect không có bản ghi tương ứng.
@@ -180,9 +180,9 @@ Publish Kafka trước, commit DB sau cũng không giải quyết được — n
   Trong cùng 1 DB transaction:
   ┌──────────────────────────────────────────────────────────┐
   │  BEGIN                                                   │
-  │  UPDATE services SET status = 'active'                   │
+  │  UPDATE services SET status = 'paused'                   │
   │  INSERT INTO outbox (event_type, payload)                │
-  │         VALUES ('service.approved', '{...}')             │
+  │         VALUES ('service.paused', '{...}')               │
   │  COMMIT  ← atomic: cả hai cùng thành công hoặc cùng fail │
   └──────────────────────────────────────────────────────────┘
            │
@@ -205,6 +205,8 @@ Publish Kafka trước, commit DB sau cũng không giải quyết được — n
   │  ON CONFLICT DO NOTHING  ← skip nếu đã xử lý             │
   └──────────────────────────────────────────────────────────┘
 ```
+
+**Phạm vi áp dụng:** Outbox/Kafka chỉ cần cho các sự kiện cascade — nơi consumer phải tự động phản ứng mà không có ai chủ động hỏi (`price.changed`, `service.paused`, `service.deprecated`, `package.published`). `service.approved` không thuộc nhóm này: bước duy nhất tiêu thụ nó là PM chủ động chọn snapshot khi xây dựng gói (`M2: PM xây dựng gói → chọn snapshots đã duyệt từ M1`) — một thao tác pull đồng bộ qua `GET /v1/services/{id}/snapshots`, không cần độ trễ thời gian thực hay đảm bảo delivery của message broker. Vì vậy service approval không phát Kafka event; M2 đọc snapshot trực tiếp qua API khi cần.
 
 Quyết định: **D11**
 
@@ -242,9 +244,10 @@ Quyết định: **D11**
          ▼
   ┌──────────────────────────────────────────────────────────────┐
   │  M1: service_snapshot tạo (bất biến, v1)                     │
-  │  event: service.approved → Kafka                             │
+  │  KHÔNG phát Kafka event — snapshot sẵn sàng qua API           │
   └──────────────────────┬───────────────────────────────────────┘
-         │ snapshot_id sẵn sàng cho M2
+         │ snapshot_id truy vấn qua GET /v1/services/{id}/snapshots
+         │ khi PM chủ động xây dựng gói (pull, không cần realtime)
          ▼
   ┌──────────────────────────────────────────────────────────────┐
   │  M2: PM xây dựng gói                                         │
@@ -953,7 +956,7 @@ CREATE TABLE m2_package.audit_log (
 
 **Quyết định:** Mỗi service (M1, M2) có bảng `outbox` trong schema của nó. Khi một use case cần phát sinh Kafka event, thay vì gọi Kafka trực tiếp, service INSERT một row vào `outbox` trong cùng DB transaction với entity change. Một background goroutine (Outbox Relay) poll bảng `outbox` mỗi 500ms, publish lên Kafka, rồi mark `status = 'published'`. Relay dùng `SELECT ... FOR UPDATE SKIP LOCKED` để nhiều instance chạy song song không conflict. Consumer phía nhận phải idempotent — dùng bảng `processed_events` với `ON CONFLICT DO NOTHING` để bỏ qua duplicate.
 
-**Lý do:** Không có distributed transaction giữa Aurora PostgreSQL và Amazon MSK. Cách publish Kafka sau khi commit DB tạo khoảng thời gian crash có thể mất message vĩnh viễn — M2 không nhận được `service.approved` nên không thể kéo snapshot mới, cascade không xảy ra, hệ thống silent inconsistent mà không có cảnh báo nào.
+**Lý do:** Không có distributed transaction giữa Aurora PostgreSQL và Amazon MSK. Cách publish Kafka sau khi commit DB tạo khoảng thời gian crash có thể mất message vĩnh viễn — M2 không nhận được `service.paused`/`price.changed` nên cascade không xảy ra, package chứa entitlement đã lỗi thời vẫn tiếp tục bán, hệ thống silent inconsistent mà không có cảnh báo nào.
 
 **Đánh đổi:**
 
@@ -978,7 +981,7 @@ CREATE TABLE m2_package.audit_log (
 
 **Hệ quả bổ sung:**
 
-- **M1 ship trước M2:** M2 chỉ cần API và Kafka events của M1 ổn định. Contract cần freeze trước khi M1 ship: `GET /v1/services/{id}/snapshots` response shape và `service.approved` Kafka payload.
+- **M1 ship trước M2:** M2 chỉ cần API và Kafka events của M1 ổn định. Contract cần freeze trước khi M1 ship: `GET /v1/services/{id}/snapshots` response shape (PM pull khi xây dựng gói — không cần event) và payload Kafka của các sự kiện cascade (`service.paused`, `price.changed`).
 - **`opid_ref` nullable trên mọi bảng identity:** Phase 2 identity merge (ACE_UID → OPID) chỉ cần data backfill, không cần ALTER TABLE.
 - **Denormalization có chủ đích:** `service_type` trong `package_items` và `supplier_id` trong `revenue_splits` được lưu lại để settlement và analytics query không cần API call về M1.
 - **Phase 2 targeting readiness:** `targeting_rules.conditions` đã hỗ trợ field `flight_class`, `loyalty_tier`, `opid_ref` trong JSONB từ Phase 1 — không cần migration khi OPID integration đi vào hoạt động.
