@@ -90,7 +90,7 @@ Quyết định: **D2**, **D3**, **D6**
                                       └──▶ replaced ──▶ archived
 
   Cascade khi upstream thay đổi (qua Kafka):
-  service price changes  ──▶  package liên quan → draft (tạm dừng bán)
+  service price changes  ──▶  package liên quan → pending_review (tạm dừng bán)
   service paused/depr.   ──▶  package liên quan → paused + cảnh báo PM
 ```
 
@@ -277,7 +277,7 @@ Quyết định: **D11**
  └────────────────────────────────────────────────────────────────────────────┘
 
   event: price.changed (Kafka)
-  ──▶ M2 consumer: package chứa snapshot_id → draft, tạm dừng bán
+  ──▶ M2 consumer: package chứa snapshot_id → pending_review, tạm dừng bán
 
   event: service.paused (Kafka)
   ──▶ M2 consumer: package chứa snapshot_id → paused, cảnh báo PM
@@ -864,7 +864,15 @@ CREATE TABLE m2_package.audit_log (
 
 ### D5 — Cascade thay đổi upstream qua Kafka Events
 
-**Quyết định:** Khi M1 phát ra `price.changed`, `service.paused` hoặc `service.deprecated`, M2 consume và tự động đánh dấu package bị ảnh hưởng cần rà soát — nhưng target status khác nhau theo loại sự kiện: `price.changed` → package đang active có entitlement liên quan chuyển ngay về `draft` (gỡ khỏi marketplace, dừng bán); `service.paused`/`service.deprecated` → package liên quan chuyển về `paused`. Cả hai đều là **hard stop tức thời** — khác với việc PM tự tay sửa một package đang active (M2-US-04 AC3), vốn chỉ fork một version draft chạy song song trong khi version đang live vẫn tiếp tục bán bình thường cho tới khi version mới được duyệt. Cascade không dùng cơ chế fork-nền đó vì giá/chi phí nền tảng đã thay đổi — tiếp tục bán theo giá cũ là đúng vấn đề mà D5 phải ngăn chặn.
+**Quyết định:** Khi M1 phát ra `price.changed`, `service.paused` hoặc `service.deprecated`, M2 consume và tự động đánh dấu package bị ảnh hưởng cần rà soát — nhưng target status khác nhau theo loại sự kiện: `price.changed` → package đang active có entitlement liên quan chuyển ngay về `pending_review` (gỡ khỏi marketplace, dừng bán, ACE Admin được thông báo cần rà soát lại giá/margin); `service.paused`/`service.deprecated` → package liên quan chuyển về `paused`. Cả hai đều là **hard stop tức thời** — khác với việc PM tự tay sửa một package đang active (M2-US-04 AC3), vốn chỉ fork một version draft chạy song song trong khi version đang live vẫn tiếp tục bán bình thường cho tới khi version mới được duyệt. Cascade không dùng cơ chế fork-nền đó vì giá/chi phí nền tảng đã thay đổi — tiếp tục bán theo giá cũ là đúng vấn đề mà D5 phải ngăn chặn.
+
+> **Lưu ý khác biệt với RFP:** RFP gốc (M1-US-05 AC4) viết nguyên văn target là `draft`. ADR này
+> chọn `pending_review` thay vì trích dẫn nguyên văn, vì ba lý do: (a) package bị cascade đã từng
+> active/được duyệt — không phải bản nháp chưa nộp lần nào như định nghĩa gốc của `draft`
+> (M2-US-04 AC2: "Draft chỉ người tạo thấy"); (b) `pending_review` khớp đúng với chính câu "cần rà
+> soát" ngay phía trên; (c) khớp với `ACE-ADR-0003-m6-m7.md` (cascade `commercial_term.amended`),
+> vốn đã giả định trước target của packages là `pending_review`. `draft` được dùng lại ở nhánh từ
+> chối trong luồng khôi phục bên dưới — đúng với ý nghĩa "chỉ người tạo thấy" của nó.
 
 **Lý do:** Nếu không có cascade tự động, nhà cung ứng tạm dừng dịch vụ hoặc đổi giá lúc 2 giờ sáng sẽ khiến package chứa entitlement đó tiếp tục bán âm thầm theo dữ liệu lỗi thời. Kafka consumer làm hệ thống tự sửa — thay đổi upstream lan truyền trong < 500ms.
 
@@ -872,14 +880,15 @@ CREATE TABLE m2_package.audit_log (
 
 | Lợi ích | Chi phí |
 |---------|---------|
-| Package tự draft/paused khi giá hoặc service thành phần có sự cố — không cần giám sát thủ công | M2 consumer phải idempotent; sự kiện trùng lặp không được double-draft/double-pause |
+| Package tự pending_review/paused khi giá hoặc service thành phần có sự cố — không cần giám sát thủ công | M2 consumer phải idempotent; sự kiện trùng lặp không được double-flag/double-pause |
 | PM được thông báo kèm ngữ cảnh cụ thể | Consumer lag trong thời gian sự cố tạo cửa sổ package lỗi thời còn active |
 
-**Luồng khôi phục sau `price.changed` (draft → active trở lại):** package bị cascade về `draft`
-không tự phục hồi — phải đi qua đúng pipeline phê duyệt như một chỉnh sửa package bình thường:
+**Luồng khôi phục sau `price.changed` (pending_review → active trở lại):** package bị cascade về
+`pending_review` không tự phục hồi — ACE Admin phải chủ động rà soát, và kết quả rẽ theo hai nhánh:
 
 ```
-Package → draft (do price.changed)
+Package → pending_review (do price.changed — hard stop, ACE Admin được
+thông báo cần rà soát giá/margin)
      │
      ▼
 PM cập nhật margin/selling_price theo giá M1 mới (M1-US-05 / M2-US-05)
@@ -887,17 +896,18 @@ Finance Manager cấu hình lại revenue_split cho version mới nếu cần (D
 package_items của version mới là row mới, không kế thừa revenue_splits cũ)
      │
      ▼
-Submit → status = pending_review ("Review" theo M2-US-04 AC1/AC2)
+ACE Admin review (cổng phê duyệt D4 — kiểm tra price sanity, revenue split
+sum=100%, platform_fee 5–40%)
      │
-     ▼
-ACE Admin review & approve (cổng phê duyệt D4 — kiểm tra price sanity,
-revenue split sum=100%, platform_fee 5–40%)
+     ├── approve ──▶ package_versions v+1 tạo (bất biến — D3): prices/
+     │               package_items/revenue_splits mới. current_version_id
+     │               → v+1, status = active. event: package.published →
+     │               Kafka (M6 catalog nhận version mới, package bán lại
+     │               được)
      │
-     ▼
-package_versions v+1 tạo (bất biến — D3): prices/package_items/
-revenue_splits mới. packages.current_version_id → v+1, status = active
-event: package.published → Kafka (M6 catalog nhận version mới, package
-bán lại được)
+     └── từ chối / cần sửa thêm ──▶ status = draft (chỉ PM thấy — M2-US-04
+                     AC2); PM sửa lại rồi submit lại → pending_review, lặp
+                     lại vòng review
      │
      ▼
 (7 ngày kể từ thời điểm thay đổi — M2-US-04 AC4) ACE Admin có thể rollback

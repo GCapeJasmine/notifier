@@ -150,8 +150,8 @@ Quy tắc quan trọng:
 - Sau khi entitlement đã nằm trong ≥1 package active hoặc đã có voucher issued, mọi sửa đổi tạo
   snapshot mới (v2, v3…); voucher đã issued luôn hiển thị theo snapshot tại thời điểm issued.
 - Khi giá thay đổi (M1-US-05): đơn đã tạo giữ giá cũ; **mọi package M2 đang hiển thị bán liên quan
-  tự động chuyển về `draft`** để tránh bán sai giá (package đã bán giữ nguyên) — đây là cascade
-  `price.changed` (Kafka, bắt buộc — xem §5).
+  tự động chuyển về `pending_review`** để tránh bán sai giá (package đã bán giữ nguyên) — đây là
+  cascade `price.changed` (Kafka, bắt buộc — xem §5, ADR-0002 D5).
 
 **Sub-flow — M1-US-07: pause/archive (một chiều)**
 
@@ -474,7 +474,7 @@ mà không có ai chủ động hỏi (chi tiết cơ chế: `ACE-ADR-0002-m1-m2
 ```
   event: price.changed (M1 → Kafka)
   ──▶ M2 consumer: mọi package đang hiển thị bán có chứa entitlement liên quan
-      → draft, tạm dừng bán ngay (hard stop — M1-US-05 AC4)
+      → pending_review, tạm dừng bán ngay (hard stop — ADR-0002 D5)
 
   event: service.paused / service.deprecated (M1 → Kafka)
   ──▶ M2 consumer: package chứa snapshot liên quan → paused, cảnh báo PM (M1-US-07)
@@ -483,12 +483,12 @@ mà không có ai chủ động hỏi (chi tiết cơ chế: `ACE-ADR-0002-m1-m2
   ──▶ M6 Marketplace consumer: catalog cập nhật version mới sẵn sàng bán
 ```
 
-**Luồng khôi phục sau `price.changed`** — package không tự phục hồi, phải đi lại đúng pipeline
-phê duyệt package bình thường (khác với PM tự sửa package đang active, vốn fork version draft
-chạy song song mà không làm gián đoạn bán hàng — M2-US-04 AC3):
+**Luồng khôi phục sau `price.changed`** — package không tự phục hồi, ACE Admin phải chủ động rà
+soát (khác với PM tự sửa package đang active, vốn fork version draft chạy song song mà không làm
+gián đoạn bán hàng — M2-US-04 AC3):
 
 ```
-Package → draft (do price.changed)
+Package → pending_review (do price.changed — hard stop)
      │
      ▼
 PM cập nhật margin/selling_price theo giá M1 mới (M2-US-05)
@@ -496,15 +496,15 @@ Finance Manager cấu hình lại revenue split cho version mới (M2-US-06 —
 package_items của version mới, không kế thừa revenue_splits cũ)
      │
      ▼
-Submit → status = pending_review ("Review" — M2-US-04 AC1/AC2)
+ACE Admin review
      │
-     ▼
-ACE Admin review & approve
+     ├── approve ──▶ package_version v+1 tạo (bất biến) — prices/
+     │               package_items/revenue_splits mới. current_version_id
+     │               → v+1, status = active. event: package.published →
+     │               Kafka (package bán lại được trên M6)
      │
-     ▼
-package_version v+1 tạo (bất biến) — prices/package_items/revenue_splits mới
-packages.current_version_id → v+1, status = active
-event: package.published → Kafka (package bán lại được trên M6)
+     └── từ chối / cần sửa thêm ──▶ status = draft (chỉ PM thấy); PM sửa
+                     lại rồi submit lại → pending_review, lặp lại review
      │
      ▼
 (7 ngày kể từ thời điểm thay đổi — M2-US-04 AC4) ACE Admin có thể rollback
