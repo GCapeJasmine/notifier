@@ -90,8 +90,8 @@ Quyết định: **D2**, **D3**, **D6**
                                       └──▶ replaced ──▶ archived
 
   Cascade khi upstream thay đổi (qua Kafka):
-  service price changes  ──▶  package liên quan → pending_review (tạm dừng bán)
-  service paused/depr.   ──▶  package liên quan → paused + cảnh báo PM
+  service price changes  ──▶  package liên quan → draft + alert PM (tạm dừng bán, cần PM submit lại package)
+  service paused/depr.   ──▶  package liên quan → paused + alert PM
 ```
 
 Quyết định: **D4**, **D5**
@@ -105,15 +105,6 @@ Quyết định: **D4**, **D5**
 **Giải pháp — Revenue split versioned + UUID cross-reference:**
 
 ```
-  Mô hình 5 thành phần cho mỗi dòng entitlement:
-  ┌──────────────────────────────────────────────────────────────┐
-  │  Giá bán = NCC share + Platform fee + ACE margin             │
-  │            + VAT(NCC) + VAT(ACE)                             │
-  │                                                              │
-  │  platform_fee_pct + ace_margin_pct + ncc_share_pct = 100%    │
-  │  Bắt buộc bởi CHECK constraint tại DB — không thể thiếu.     │
-  └──────────────────────────────────────────────────────────────┘
-
   Tham chiếu liên service:
   ┌────────────────────────────┐       ┌──────────────────────────────┐
   │  m1_supply                 │       │  m2_package                  │
@@ -174,7 +165,7 @@ Quyết định: **D9**, **D10**
 
 Publish Kafka trước, commit DB sau cũng không giải quyết được — nếu DB commit fail, event đã đến consumer và gây side-effect không có bản ghi tương ứng.
 
-**Giải pháp — Transactional Outbox Pattern:**
+**Giải pháp — Transactional Outbox Pattern qua Debezium CDC:**
 
 ```
   Trong cùng 1 DB transaction:
@@ -186,19 +177,22 @@ Publish Kafka trước, commit DB sau cũng không giải quyết được — n
   │  COMMIT  ← atomic: cả hai cùng thành công hoặc cùng fail │
   └──────────────────────────────────────────────────────────┘
            │
-           │  (DB đã commit, outbox row tồn tại)
+           │  (DB đã commit, outbox row tồn tại trong WAL)
            ▼
   ┌──────────────────────────────────────────────────────────┐
-  │  Outbox Relay (background goroutine)                     │
-  │  SELECT ... FROM outbox WHERE status='pending'           │
-  │  FOR UPDATE SKIP LOCKED  ← nhiều instance không conflict │
+  │  Debezium PostgreSQL Connector (Kafka Connect)           │
+  │  Đọc trực tiếp write-ahead log (WAL) qua logical         │
+  │  replication slot (wal_level=logical) — KHÔNG polling,   │
+  │  event-driven theo LSN mỗi khi WAL advance               │
   │                                                          │
-  │  kafka.Publish(event)                                    │
-  │  UPDATE outbox SET status='published'                    │
+  │  Outbox Event Router SMT "bóc" row → Kafka message:      │
+  │  topic = event_type, key = aggregate_id, value = payload │
+  │  Offset (LSN) do Kafka Connect tự lưu — không cần cột    │
+  │  status/retry_count/published_at ở tầng DB               │
   └──────────────────────────────────────────────────────────┘
            │
-           ▼  (có thể publish trùng nếu relay crash sau publish
-               nhưng trước khi mark 'published')
+           ▼  (at-least-once — connector có thể replay từ LSN
+               cuối cùng đã commit nếu restart)
   ┌──────────────────────────────────────────────────────────┐
   │  Consumer phải idempotent                                │
   │  INSERT INTO processed_events (event_id)                 │
@@ -292,7 +286,7 @@ Quyết định: **D11**
                          ──────< price_history       (append-only)
                          ──────< inventory ──────────< reservations (TTL 15p)
   audit_log
-  outbox  (relay → Kafka)
+  outbox  (Debezium CDC → Kafka)
 
   M2 (schema: m2_package)
   packages ──< package_versions (immutable) ──< package_items  ──▶ M1 snapshot_id
@@ -536,9 +530,13 @@ CREATE TABLE m1_supply.audit_log (
 ) PARTITION BY RANGE (created_at);
 
 -- ----------------------------------------------------------------
--- OUTBOX (Transactional Outbox Pattern — D11)
--- INSERT trong cùng transaction với entity change.
--- Relay đọc và publish lên Kafka; không bao giờ DELETE row.
+-- OUTBOX (Transactional Outbox Pattern — D11, CDC qua Debezium)
+-- INSERT trong cùng transaction với entity change. KHÔNG có cột
+-- status/retry_count/published_at — Debezium đọc trực tiếp WAL qua
+-- logical replication, không polling nên không cần đánh dấu
+-- "pending/published" ở tầng DB; offset (LSN) do Kafka Connect tự
+-- quản lý. Row giữ lại để phục vụ replay/debug, dọn định kỳ theo
+-- created_at (không phải theo status) — không bao giờ DELETE ngay.
 -- ----------------------------------------------------------------
 CREATE TABLE m1_supply.outbox (
     id             UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -546,14 +544,10 @@ CREATE TABLE m1_supply.outbox (
     aggregate_id   UUID         NOT NULL,
     event_type     VARCHAR(100) NOT NULL,
     payload        JSONB        NOT NULL,
-    status         VARCHAR(20)  NOT NULL DEFAULT 'pending'
-                       CHECK (status IN ('pending','published','failed')),
-    retry_count    INT          NOT NULL DEFAULT 0,
-    created_at     TIMESTAMPTZ  NOT NULL DEFAULT now(),
-    published_at   TIMESTAMPTZ
+    created_at     TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
 
-CREATE INDEX ON m1_supply.outbox (status, created_at) WHERE status = 'pending';
+CREATE INDEX ON m1_supply.outbox (created_at);
 ```
 
 > M2 có bảng `outbox` tương tự trong schema `m2_package` với cấu trúc giống hệt.
@@ -994,20 +988,20 @@ tại thời điểm `order.confirmed` (D3, D7).
 
 ---
 
-### D11 — Transactional Outbox Pattern cho Kafka publishing
+### D11 — Transactional Outbox Pattern qua Debezium CDC
 
-**Quyết định:** Mỗi service (M1, M2) có bảng `outbox` trong schema của nó. Khi một use case cần phát sinh Kafka event, thay vì gọi Kafka trực tiếp, service INSERT một row vào `outbox` trong cùng DB transaction với entity change. Một background goroutine (Outbox Relay) poll bảng `outbox` mỗi 500ms, publish lên Kafka, rồi mark `status = 'published'`. Relay dùng `SELECT ... FOR UPDATE SKIP LOCKED` để nhiều instance chạy song song không conflict. Consumer phía nhận phải idempotent — dùng bảng `processed_events` với `ON CONFLICT DO NOTHING` để bỏ qua duplicate.
+**Quyết định:** Mỗi service (M1, M2) có bảng `outbox` trong schema của nó. Khi một use case cần phát sinh Kafka event, thay vì gọi Kafka trực tiếp, service INSERT một row vào `outbox` trong cùng DB transaction với entity change — phần này giữ nguyên so với outbox pattern gốc. Cơ chế relay không phải goroutine tự viết polling mà là **Debezium PostgreSQL Connector** chạy trên **Kafka Connect**, đọc trực tiếp write-ahead log (WAL) của Aurora PostgreSQL qua logical replication slot (`wal_level=logical`) — event-driven theo LSN, không polling. **Outbox Event Router** (Debezium SMT) tự động "bóc" mỗi row `outbox` thành một Kafka message đúng topic/key mà không cần code publish/mark-published thủ công; offset (LSN) do Kafka Connect tự lưu và quản lý resume-after-crash, không cần cột `status` ở tầng DB. Consumer phía nhận vẫn phải idempotent — dùng bảng `processed_events` với `ON CONFLICT DO NOTHING` để bỏ qua duplicate.
 
-**Lý do:** Không có distributed transaction giữa Aurora PostgreSQL và Amazon MSK. Cách publish Kafka sau khi commit DB tạo khoảng thời gian crash có thể mất message vĩnh viễn — M2 không nhận được `service.paused`/`price.changed` nên cascade không xảy ra, package chứa entitlement đã lỗi thời vẫn tiếp tục bán, hệ thống silent inconsistent mà không có cảnh báo nào.
+**Lý do:** Vẫn không có distributed transaction giữa Aurora PostgreSQL và Amazon MSK, nên nguyên tắc outbox (ghi event cùng transaction với entity change) không đổi. Nhưng relay tự viết bằng polling có ba vấn đề cụ thể: (1) latency cố định ~500ms bất kể outbox đang rỗng hay dồn ứ nhiều thay đổi; (2) phải tự vận hành logic retry/backoff/đánh dấu published, tăng bề mặt code cần maintain; (3) `SELECT ... FOR UPDATE SKIP LOCKED` chạy mỗi 500ms tạo tải liên tục lên Aurora dù không có gì thay đổi. Debezium đọc WAL theo cơ chế push khi WAL advance, loại bỏ cả ba vấn đề trên.
 
 **Đánh đổi:**
 
 | Lợi ích | Chi phí |
 |---------|---------|
-| Đảm bảo at-least-once delivery — event không bao giờ mất dù crash tại bất kỳ điểm nào | Relay tạo thêm ~500ms latency so với publish trực tiếp; chấp nhận được cho ACE Phase 1 |
-| Entity state và event luôn nhất quán — không có trạng thái "DB đã thay đổi nhưng event chưa gửi" | Consumer bắt buộc phải idempotent — thêm bảng `processed_events` và kiểm tra trước khi xử lý |
-| Không cần distributed transaction hay saga orchestrator phức tạp | `outbox` tăng trưởng theo thời gian; cần job dọn row `published` cũ hơn 7 ngày |
-| Nhiều relay instance chạy song song an toàn nhờ `SKIP LOCKED` | Nếu Kafka down kéo dài, `outbox` tích luỹ; cần alert khi `retry_count > 3` |
+| Latency giảm từ ~500ms (chu kỳ poll cố định) xuống mức sub-second, event-driven theo WAL | Thêm hạ tầng mới: Kafka Connect cluster chạy Debezium connector — thành phần vận hành ngoài Aurora + MSK |
+| Không cần tự viết/maintain logic polling, retry, đánh dấu published — Kafka Connect tự quản lý offset (LSN) | Logical replication slot giữ WAL không được recycle tới khi Debezium consume xong — connector down kéo dài có thể làm WAL phình to, đầy disk Aurora |
+| Schema `outbox` đơn giản hơn — không cần `status`/`retry_count`/`published_at`, không còn `SELECT WHERE status='pending'` liên tục lên DB | Cần alerting/monitoring riêng cho replication slot lag và Kafka Connect connector health — lớp giám sát mới ngoài các dashboard hiện có |
+| Không có race condition nhiều instance polling cùng lúc — Debezium connector đọc WAL tuần tự theo LSN, không cần `SKIP LOCKED` | Thay đổi schema trên bảng `outbox` (hoặc publication liên quan) cần cấu hình lại Debezium connector — thêm một điểm phối hợp khi migrate |
 
 ---
 
@@ -1019,7 +1013,7 @@ tại thời điểm `order.confirmed` (D3, D7).
 | **Thương mại hoá có kiểm soát** | Không có service hay package nào vào pipeline thương mại mà không qua ACE approval. Cascade Kafka tự paused package khi service thành phần có sự cố trong < 500ms. | ACE Admin review queue là rủi ro điểm nghẽn. Pre-validation checks (completeness, price sanity) nên tự động hoá trong submit workflow. |
 | **Tính toàn vẹn tài chính** | Revenue split CHECK constraint tổng = 100% tại DB. Split version khoá tại checkout. Schema riêng biệt giữ M1/M2 deploy độc lập. | Split `effective_from` phải phối hợp với contract activation trong M7. Dangling UUID references (M2 trỏ snapshot đã archive trong M1) cần audit job định kỳ kiểm tra. |
 | **Hiệu năng** | Atomic inventory UPDATE chặn race condition overbooking. Partitioning giữ query performance khi > 10M rows mà không rewrite query. | Partition LIST cần script tự động tạo partition mới khi mở sân bay. Index nên monitor bằng `pg_stat_user_indexes` sau khi có traffic thực — không thêm index speculative. |
-| **Tính tin cậy message** | Outbox Pattern đảm bảo at-least-once delivery — không có event nào bị mất dù crash tại bất kỳ điểm nào trong luồng xử lý. | Consumer phải idempotent. Cần alert khi `outbox.retry_count > 3` (Kafka có thể down). Job dọn row `published` cũ hơn 7 ngày để tránh bảng phình to. |
+| **Tính tin cậy message** | Outbox Pattern qua Debezium CDC đảm bảo at-least-once delivery — không có event nào bị mất dù crash tại bất kỳ điểm nào trong luồng xử lý. | Consumer phải idempotent. Cần alert khi Debezium connector down hoặc replication slot lag vượt ngưỡng (WAL tích tụ). Job dọn row `outbox` cũ hơn 7 ngày theo `created_at` để tránh bảng phình to. |
 
 **Hệ quả bổ sung:**
 
