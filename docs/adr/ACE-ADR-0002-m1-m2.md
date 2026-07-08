@@ -281,7 +281,9 @@ Quyết định: **D11**
  └────────────────────────────────────────────────────────────────────────────┘
 
   M1 (schema: m1_supply)
-  suppliers ──< supplier_users
+  suppliers ──▶ UUID user_management.user_role_assignments.tenant_id
+             (tenant_type='supplier' — identity/role của user thuộc nhà
+             cung ứng do User Management Service sở hữu, xem ADR-0004)
   suppliers ──< services ──────< service_snapshots  (immutable)
                          ──────< price_history       (append-only)
                          ──────< inventory ──────────< reservations (TTL 15p)
@@ -348,20 +350,14 @@ CREATE INDEX ON m1_supply.suppliers (status);
 CREATE INDEX ON m1_supply.suppliers USING GIN (airport_scope);
 
 -- ----------------------------------------------------------------
--- SUPPLIER USERS
+-- SUPPLIER USERS — KHÔNG còn bảng riêng ở đây.
+-- Identity, role (admin/operator/viewer) và session của user thuộc
+-- nhà cung ứng nay do User Management Service sở hữu hoàn toàn
+-- (xem ACE-ADR-0004-user-management.md — user_role_assignments với
+-- tenant_type='supplier', tenant_id=suppliers.supplier_id, KHÔNG FK
+-- xuyên schema, cùng nguyên tắc D1). M1 chỉ cần supplier_id để trỏ
+-- sang, không lưu trùng danh tính/role ở đây.
 -- ----------------------------------------------------------------
-CREATE TABLE m1_supply.supplier_users (
-    user_id        UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
-    supplier_id    UUID         NOT NULL REFERENCES m1_supply.suppliers,
-    email          VARCHAR(255) NOT NULL,
-    role           VARCHAR(20)  NOT NULL CHECK (role IN ('admin','operator','viewer')),
-    status         VARCHAR(20)  NOT NULL DEFAULT 'active'
-                       CHECK (status IN ('active','inactive')),
-    created_at     TIMESTAMPTZ  NOT NULL DEFAULT now(),
-    deactivated_at TIMESTAMPTZ
-);
-
-CREATE INDEX ON m1_supply.supplier_users (supplier_id);
 
 -- ----------------------------------------------------------------
 -- SERVICES (mutable)
