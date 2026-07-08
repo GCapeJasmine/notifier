@@ -12,7 +12,7 @@ tập trung duy nhất thay vì mỗi module tự quản lý user riêng.
 
 > Nguồn: `T2_Tài Liệu Kỹ Thuật.docx`. Tài liệu này chỉ mô tả entity ở mức narrative (PK/FK, mô tả
 > chức năng) — không có DDL. DDL dưới đây do ADR này thiết kế, theo đúng convention đã dùng ở
-> [`ACE-ADR-0002-m1-m2.md`](./ACE-ADR-0002-m1-m2.md) (schema riêng theo service, UUID PK, audit
+> [`ACE-ADR-0002-m1-m2.md`](ACE-ADR-0001-m1-m2.md) (schema riêng theo service, UUID PK, audit
 > columns, cross-service reference bằng UUID không FK).
 
 Bốn trách nhiệm cốt lõi (§4.3.1):

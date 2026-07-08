@@ -3,7 +3,7 @@
 > Nguồn: `RFP_ACE_NEWFORMAT_v2.0_FINAL.pdf`, mục 4.1 (Module 1) và 4.2 (Module 2).
 > Tài liệu này mô tả **use case và luồng nghiệp vụ** theo góc nhìn actor. Các quyết định kiến trúc,
 > DB schema, DDL và cơ chế reliability (outbox, snapshot bất biến...) đã được phân tích trong
-> [`ACE-ADR-0002-m1-m2.md`](./ACE-ADR-0002-m1-m2.md) — tài liệu này **không lặp lại** phần đó,
+> [`ACE-ADR-0002-m1-m2.md`](ACE-ADR-0001-m1-m2.md) — tài liệu này **không lặp lại** phần đó,
 > chỉ tham chiếu khi cần giải thích luồng.
 
 ---
