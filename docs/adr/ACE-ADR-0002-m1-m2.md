@@ -90,7 +90,7 @@ Quyết định: **D2**, **D3**, **D6**
                                       └──▶ replaced ──▶ archived
 
   Cascade khi upstream thay đổi (qua Kafka):
-  service price changes  ──▶  package liên quan → pending_review (tạm dừng bán)
+  service price changes  ──▶  package liên quan → draft (tạm dừng bán)
   service paused/depr.   ──▶  package liên quan → paused + cảnh báo PM
 ```
 
@@ -277,7 +277,7 @@ Quyết định: **D11**
  └────────────────────────────────────────────────────────────────────────────┘
 
   event: price.changed (Kafka)
-  ──▶ M2 consumer: package chứa snapshot_id → pending_review, tạm dừng bán
+  ──▶ M2 consumer: package chứa snapshot_id → draft, tạm dừng bán
 
   event: service.paused (Kafka)
   ──▶ M2 consumer: package chứa snapshot_id → paused, cảnh báo PM
@@ -864,16 +864,49 @@ CREATE TABLE m2_package.audit_log (
 
 ### D5 — Cascade thay đổi upstream qua Kafka Events
 
-**Quyết định:** Khi M1 phát ra `price.changed`, `service.paused` hoặc `service.deprecated`, M2 consume và tự động đánh dấu package bị ảnh hưởng cần rà soát. Package đang active có service thành phần bị paused tự động chuyển về `paused` — không thể tiếp tục bán cho đến khi PM review.
+**Quyết định:** Khi M1 phát ra `price.changed`, `service.paused` hoặc `service.deprecated`, M2 consume và tự động đánh dấu package bị ảnh hưởng cần rà soát — nhưng target status khác nhau theo loại sự kiện: `price.changed` → package đang active có entitlement liên quan chuyển ngay về `draft` (gỡ khỏi marketplace, dừng bán); `service.paused`/`service.deprecated` → package liên quan chuyển về `paused`. Cả hai đều là **hard stop tức thời** — khác với việc PM tự tay sửa một package đang active (M2-US-04 AC3), vốn chỉ fork một version draft chạy song song trong khi version đang live vẫn tiếp tục bán bình thường cho tới khi version mới được duyệt. Cascade không dùng cơ chế fork-nền đó vì giá/chi phí nền tảng đã thay đổi — tiếp tục bán theo giá cũ là đúng vấn đề mà D5 phải ngăn chặn.
 
-**Lý do:** Nếu không có cascade tự động, nhà cung ứng tạm dừng dịch vụ lúc 2 giờ sáng sẽ khiến package chứa entitlement đó tiếp tục bán âm thầm. Kafka consumer làm hệ thống tự sửa — thay đổi upstream lan truyền trong < 500ms.
+**Lý do:** Nếu không có cascade tự động, nhà cung ứng tạm dừng dịch vụ hoặc đổi giá lúc 2 giờ sáng sẽ khiến package chứa entitlement đó tiếp tục bán âm thầm theo dữ liệu lỗi thời. Kafka consumer làm hệ thống tự sửa — thay đổi upstream lan truyền trong < 500ms.
 
 **Đánh đổi:**
 
 | Lợi ích | Chi phí |
 |---------|---------|
-| Package tự paused khi service thành phần có sự cố — không cần giám sát thủ công | M2 consumer phải idempotent; sự kiện trùng lặp không được double-pause |
+| Package tự draft/paused khi giá hoặc service thành phần có sự cố — không cần giám sát thủ công | M2 consumer phải idempotent; sự kiện trùng lặp không được double-draft/double-pause |
 | PM được thông báo kèm ngữ cảnh cụ thể | Consumer lag trong thời gian sự cố tạo cửa sổ package lỗi thời còn active |
+
+**Luồng khôi phục sau `price.changed` (draft → active trở lại):** package bị cascade về `draft`
+không tự phục hồi — phải đi qua đúng pipeline phê duyệt như một chỉnh sửa package bình thường:
+
+```
+Package → draft (do price.changed)
+     │
+     ▼
+PM cập nhật margin/selling_price theo giá M1 mới (M1-US-05 / M2-US-05)
+Finance Manager cấu hình lại revenue_split cho version mới nếu cần (D7 —
+package_items của version mới là row mới, không kế thừa revenue_splits cũ)
+     │
+     ▼
+Submit → status = pending_approval ("Review" theo M2-US-04 AC1/AC2)
+     │
+     ▼
+ACE Admin review & approve (cổng phê duyệt D4 — kiểm tra price sanity,
+revenue split sum=100%, platform_fee 5–40%)
+     │
+     ▼
+package_versions v+1 tạo (bất biến — D3): prices/package_items/
+revenue_splits mới. packages.current_version_id → v+1, status = active
+event: package.published → Kafka (M6 catalog nhận version mới, package
+bán lại được)
+     │
+     ▼
+(7 ngày kể từ thời điểm thay đổi — M2-US-04 AC4) ACE Admin có thể rollback
+current_version_id về version trước đó nếu version mới sai
+```
+
+Trong suốt luồng này, order đã đặt dưới version cũ (trước khi giá đổi) hoàn toàn không bị ảnh
+hưởng — `order_items` đã khoá `package_version_id` + `price_snapshot` + `revenue_split_version_id`
+tại thời điểm `order.confirmed` (D3, D7).
 
 ---
 

@@ -474,7 +474,7 @@ mà không có ai chủ động hỏi (chi tiết cơ chế: `ACE-ADR-0002-m1-m2
 ```
   event: price.changed (M1 → Kafka)
   ──▶ M2 consumer: mọi package đang hiển thị bán có chứa entitlement liên quan
-      → pending_review / draft, tạm dừng bán (M1-US-05, AC4)
+      → draft, tạm dừng bán ngay (hard stop — M1-US-05 AC4)
 
   event: service.paused / service.deprecated (M1 → Kafka)
   ──▶ M2 consumer: package chứa snapshot liên quan → paused, cảnh báo PM (M1-US-07)
@@ -482,6 +482,37 @@ mà không có ai chủ động hỏi (chi tiết cơ chế: `ACE-ADR-0002-m1-m2
   event: package.published (M2 → Kafka)
   ──▶ M6 Marketplace consumer: catalog cập nhật version mới sẵn sàng bán
 ```
+
+**Luồng khôi phục sau `price.changed`** — package không tự phục hồi, phải đi lại đúng pipeline
+phê duyệt package bình thường (khác với PM tự sửa package đang active, vốn fork version draft
+chạy song song mà không làm gián đoạn bán hàng — M2-US-04 AC3):
+
+```
+Package → draft (do price.changed)
+     │
+     ▼
+PM cập nhật margin/selling_price theo giá M1 mới (M2-US-05)
+Finance Manager cấu hình lại revenue split cho version mới (M2-US-06 —
+package_items của version mới, không kế thừa revenue_splits cũ)
+     │
+     ▼
+Submit → status = pending_approval ("Review" — M2-US-04 AC1/AC2)
+     │
+     ▼
+ACE Admin review & approve
+     │
+     ▼
+package_version v+1 tạo (bất biến) — prices/package_items/revenue_splits mới
+packages.current_version_id → v+1, status = active
+event: package.published → Kafka (package bán lại được trên M6)
+     │
+     ▼
+(7 ngày kể từ thời điểm thay đổi — M2-US-04 AC4) ACE Admin có thể rollback
+current_version_id về version trước đó nếu version mới sai
+```
+
+Order đã đặt dưới version cũ (trước khi giá đổi) không bị ảnh hưởng trong suốt luồng này —
+`order_items` đã khoá `package_version_id` + `price_snapshot` tại thời điểm `order.confirmed`.
 
 ---
 
